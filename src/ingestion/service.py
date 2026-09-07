@@ -53,14 +53,7 @@ def create_document(
     content_type: str | None,
     raw_bytes: bytes,
 ) -> Document:
-    """Validates the file type, stores the raw bytes in MinIO, inserts the
-    `pending` Document row, then enqueues the async extraction task (spec
-    2.1's "async pipeline with status tracking"). Upload happens before
-    the DB insert so a storage failure never leaves a DB row pointing at
-    nothing; the inverse case (DB commit fails after a successful upload)
-    is an accepted MVP tradeoff -- no distributed transaction across
-    Postgres and MinIO.
-    """
+
     source_type = _resolve_source_type(filename)
     storage_key = f"{domain_id}/{uuid4()}/{filename}"
 
@@ -93,9 +86,7 @@ def _enqueue_extraction(document_id: UUID) -> None:
 
 
 def process_document_text_extraction(db: Session, document_id: UUID) -> None:
-    """Runs inside the Celery worker (see tasks/pipeline.py). Owns the
-    full pending->processing->ready|failed transition for one document.
-    """
+    
     from . import extraction
 
     document = db.query(Document).filter(Document.id == document_id).first()
@@ -110,7 +101,7 @@ def process_document_text_extraction(db: Session, document_id: UUID) -> None:
         raw_bytes = download_bytes(document.storage_key)
         result = extraction.extract(document.source_type, raw_bytes)
 
-        document.status = DocumentStatus.READY
+        document.status = DocumentStatus.INDEXING
         document.extracted_text = result.text
         document.ocr_used = result.ocr_used
         document.author = result.author
@@ -121,15 +112,10 @@ def process_document_text_extraction(db: Session, document_id: UUID) -> None:
         document.error_message = None
         db.commit()
         logging.info(
-            f"Document {document_id} ready ({len(result.text)} chars, "
+            f"Document {document_id} text-extracted, indexing ({len(result.text)} chars, "
             f"ocr_used={result.ocr_used}, tables={len(result.tables)})"
         )
     except Exception as e:
-        # Covers failure at *any* point above -- including the initial
-        # status-transition commit itself -- so a document never gets
-        # stuck in pending/processing forever; it always lands on a
-        # terminal status (spec 2.1's "async pipeline with status
-        # tracking" implies every document eventually resolves).
         logging.error(f"Document {document_id} extraction failed: {e}")
         db.rollback()
         document.status = DocumentStatus.FAILED

@@ -35,8 +35,9 @@ def _make_pending_document(db_session):
     return document
 
 
-def test_extract_text_task_chains_into_chunk_and_embed_on_ready(db_session, monkeypatch):
-    """Spec 2.4's auto-chaining: once a document lands on `ready`,
+def test_extract_text_task_chains_into_chunk_and_embed_on_indexing(db_session, monkeypatch):
+    """Spec 2.4's auto-chaining: once a document lands on `indexing`
+    (text extracted, not yet chunked -- see DocumentStatus's docstring),
     extract_text_task must enqueue chunk_and_embed_task itself -- no
     manual trigger needed for the pipeline to continue. The task opens
     its own session via `SessionLocal()`; patched here to hand back the

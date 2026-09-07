@@ -91,8 +91,14 @@ def test_import_schema_from_yaml_file(client: TestClient, platform_admin_headers
 
     assert response.status_code == 201
     body = response.json()
-    assert body["node_types"] == ["Person", "Company"]
-    assert body["relation_types"] == [{"name": "works_at", "source_type": "Person", "target_type": "Company"}]
+    assert body["node_types"] == [
+        {"name": "Person", "description": None, "threshold": None},
+        {"name": "Company", "description": None, "threshold": None},
+    ]
+    assert body["relation_types"] == [{
+        "name": "works_at", "source_type": "Person", "target_type": "Company",
+        "description": None, "threshold": None,
+    }]
 
 
 def test_contributor_cannot_create_schema(client: TestClient, platform_admin_headers, make_user_with_role):

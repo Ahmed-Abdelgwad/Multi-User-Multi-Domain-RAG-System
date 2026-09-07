@@ -29,11 +29,13 @@ def extract_text_task(self, document_id: str) -> None:
     """Runs the async pipeline's first stage (spec 2.1: "async pipeline
     with status tracking") for one Document: downloads the raw file from
     MinIO, extracts text (+OCR fallback, +author/creation-date metadata),
-    and updates the Document's status. Opens its own DB session since it
-    runs in the worker process, not under a request's `DbSession`
-    dependency. On success, chains into `chunk_and_embed_task` (spec 2.4)
-    so upload -> extraction -> chunking -> embedding is one continuous
-    async pipeline with no manual trigger needed.
+    and updates the Document's status to INDEXING (not READY -- that only
+    happens once chunk_and_embed_task itself finishes, see
+    chunking/service.py). Opens its own DB session since it runs in the
+    worker process, not under a request's `DbSession` dependency. On
+    success, chains into `chunk_and_embed_task` (spec 2.4) so upload ->
+    extraction -> chunking -> embedding is one continuous async pipeline
+    with no manual trigger needed.
     """
     from src.database.core import SessionLocal
     from src.entities.document import Document
@@ -44,7 +46,7 @@ def extract_text_task(self, document_id: str) -> None:
     try:
         process_document_text_extraction(db, UUID(document_id))
         document = db.query(Document).filter(Document.id == UUID(document_id)).first()
-        if document and document.status == DocumentStatus.READY:
+        if document and document.status == DocumentStatus.INDEXING:
             chunk_and_embed_task.delay(document_id)
     finally:
         db.close()

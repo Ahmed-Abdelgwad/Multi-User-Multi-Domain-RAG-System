@@ -6,14 +6,22 @@ from src.exceptions import InvalidOntologySchemaError, OntologySchemaNotFoundErr
 from . import models
 
 
-def _validate_and_normalize(create: models.OntologySchemaCreate) -> tuple[list[str], list[models.RelationTypeSpec]]:
-    node_types = [n.strip() for n in create.node_types]
-    if any(not n for n in node_types):
-        raise InvalidOntologySchemaError("node_types must not contain blank entries")
-    if len(node_types) != len(set(node_types)):
-        raise InvalidOntologySchemaError("node_types must not contain duplicates")
+def _validate_and_normalize(
+    create: models.OntologySchemaCreate,
+) -> tuple[list[models.NodeTypeSpec], list[models.RelationTypeSpec]]:
+    node_types: list[models.NodeTypeSpec] = []
+    seen_names: set[str] = set()
+    for node in create.node_types:
+        name = node.name.strip()
+        if not name:
+            raise InvalidOntologySchemaError("node_types must not contain blank entries")
+        if name in seen_names:
+            raise InvalidOntologySchemaError("node_types must not contain duplicates")
+        seen_names.add(name)
+        description = node.description.strip() if node.description else None
+        node_types.append(models.NodeTypeSpec(name=name, description=description or None, threshold=node.threshold))
 
-    node_type_set = set(node_types)
+    node_type_set = seen_names
     relation_types: list[models.RelationTypeSpec] = []
     seen_relations: set[tuple[str, str, str]] = set()
     for relation in create.relation_types:
@@ -34,7 +42,11 @@ def _validate_and_normalize(create: models.OntologySchemaCreate) -> tuple[list[s
                 f"duplicate relation_type '{name}' ({source_type} -> {target_type})"
             )
         seen_relations.add(key)
-        relation_types.append(models.RelationTypeSpec(name=name, source_type=source_type, target_type=target_type))
+        description = relation.description.strip() if relation.description else None
+        relation_types.append(models.RelationTypeSpec(
+            name=name, source_type=source_type, target_type=target_type,
+            description=description or None, threshold=relation.threshold,
+        ))
 
     return node_types, relation_types
 
@@ -62,22 +74,6 @@ def list_schema_versions(db: Session, domain_id: UUID) -> list[OntologySchema]:
 def create_schema_version(
     db: Session, domain_id: UUID, create: models.OntologySchemaCreate, created_by: UUID
 ) -> OntologySchema:
-    """Creates a new version and deactivates whatever was previously active,
-    in the same transaction, so exactly one version is ever active per
-    domain (extraction always reads a single unambiguous schema) -- also
-    enforced at the DB level by a partial unique index on
-    `(domain_id) WHERE is_active` (migration 0009), so a race between two
-    concurrent admins can't leave two active versions. Old versions are
-    kept, not deleted, so existing graph_node/graph_edge rows'
-    `ontology_version` stamps stay resolvable.
-
-    A new active version means every already-extracted graph_node/graph_edge
-    in this domain was produced against a now-stale schema, so this also
-    schedules a background re-extraction pass over the domain's ready
-    documents (spec 2.5) -- enqueued via Celery, never run inline here,
-    since re-running extraction for a whole domain can be slow and must
-    not block this request/commit.
-    """
     node_types, relation_types = _validate_and_normalize(create)
 
     previous_active = (
@@ -98,7 +94,7 @@ def create_schema_version(
         id=uuid4(),
         domain_id=domain_id,
         version=next_version,
-        node_types=node_types,
+        node_types=[n.model_dump() for n in node_types],
         relation_types=[r.model_dump() for r in relation_types],
         is_active=True,
         created_by=created_by,

@@ -6,21 +6,6 @@ from ..database.core import Base
 
 
 class OntologySchema(Base):
-    """A versioned, domain-scoped schema (spec 2.6) that constrains what
-    Phase 7's extraction model is allowed to emit: `node_types` is a flat
-    list[str] of allowed entity type names; `relation_types` is a
-    list[{"name", "source_type", "target_type"}], each referencing a
-    declared node type. Maps directly onto gliner2's `JointIE` schema
-    builder (`.entities(node_types)` + `.relation(name, source_type,
-    target_type)` per declared relation_type) with no translation layer.
-
-    Only one version is ever `is_active` per domain at a time -- creating
-    a new version deactivates the previous one in the same transaction
-    (see ontology/service.py), so extraction always reads a single
-    unambiguous active schema. Old versions are kept (not deleted) so
-    `graph_node`/`graph_edge` rows can record which `ontology_version`
-    produced them.
-    """
     __tablename__ = 'ontology_schemas'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

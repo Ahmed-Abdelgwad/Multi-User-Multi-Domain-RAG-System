@@ -36,20 +36,14 @@ class DocumentSourceType(str, enum.Enum):
 
 
 class DocumentStatus(str, enum.Enum):
-    """Spec 2.1's "async pipeline with status tracking" -- the status a
-    client polls on a Document while ingestion runs in the background.
-    """
+    
     PENDING = "pending"
     PROCESSING = "processing"
+    INDEXING = "indexing"
     READY = "ready"
     FAILED = "failed"
 
 
 class ChunkContentType(str, enum.Enum):
-    """Spec 2.4/2.5's Camelot retrofit: a table extracted from a PDF/DOCX
-    (Document.tables_extracted) becomes exactly one atomic chunk, never
-    merged or split by Paragraph Group Chunking -- splitting a table
-    destroys row/column alignment for retrieval.
-    """
     TEXT = "text"
     TABLE = "table"

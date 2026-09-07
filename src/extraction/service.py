@@ -62,13 +62,6 @@ def _link_node_to_chunk(db: Session, chunk_id: UUID, node_id: UUID) -> None:
     )
     if not exists:
         db.add(ChunkGraphNodeLink(id=uuid4(), chunk_id=chunk_id, graph_node_id=node_id))
-        # Flushed immediately (session's autoflush is off, see
-        # database/core.py) so a second mention of the *same* entity
-        # later in this same chunk sees this pending insert on its own
-        # exists-check instead of racing it -- found live against a real
-        # CV, where a skill/tool name is often mentioned more than once
-        # within one chunk, which raised a UniqueViolation on
-        # `uq_chunk_graph_node_links_pair` before this fix.
         db.flush()
 
 
@@ -119,14 +112,7 @@ def _link_edge_to_chunk_and_recompute_mentions(db: Session, chunk_id: UUID, edge
 def process_extract_entities_for_chunk(
     db: Session, chunk: Chunk, schema: OntologySchema, extractor_version: str
 ) -> None:
-    """Extracts entities/relations from one chunk's content and upserts
-    them into the domain's knowledge graph. Entities are upserted (and
-    linked to this chunk) regardless of whether they participate in any
-    relation -- an entity mentioned with no captured relationship is still
-    a real node. Triples are only turned into edges when both endpoints
-    were themselves extracted from this same chunk (JointIE's own output
-    guarantees this).
-    """
+
     from . import extractor
 
     output = extractor.extract(chunk.content, schema.node_types, schema.relation_types)
@@ -152,18 +138,6 @@ def process_extract_entities_for_chunk(
 
 
 def process_extract_entities_for_document(db: Session, document_id: UUID) -> None:
-    """Runs inside the Celery worker (phase 7, spec 2.5), fired by the
-    periodic `batch_extract_entities_task` (tasks/pipeline.py) -- not
-    chained directly off `chunk_and_embed_task`, per the plan's canonical
-    2.5 text ("runs as a background batch job post-ingest ... graph lags
-    behind vector index by one job cycle, acceptable for MVP").
-
-    Processes every active chunk of this document that hasn't been
-    extracted yet (`entities_extracted_at IS NULL`). Skips gracefully
-    (not a failure) if the domain has no active ontology yet -- extraction
-    simply hasn't been configured for that domain, same as a domain never
-    touching ingestion never getting a `DomainIngestionConfig` row.
-    """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         logging.error(f"process_extract_entities_for_document: document {document_id} not found")
@@ -192,14 +166,6 @@ def process_extract_entities_for_document(db: Session, document_id: UUID) -> Non
     from . import extractor
     extractor_version = extractor.extractor_model_version()
 
-    # Committed per chunk, not once for the whole document: each chunk
-    # runs the (expensive) model independently, so one chunk's failure
-    # must not discard every other chunk's already-successful work in
-    # the same pass -- found live on a real 25-chunk document, where a
-    # single UniqueViolation on one chunk rolled back all 25 chunks'
-    # extractions under the previous single-transaction version. A
-    # failed chunk simply keeps `entities_extracted_at = NULL`, so the
-    # next batch tick retries just that one.
     processed = 0
     for chunk in chunks:
         try:
@@ -208,7 +174,7 @@ def process_extract_entities_for_document(db: Session, document_id: UUID) -> Non
             db.commit()
             processed += 1
         except Exception as e:
-            logging.error(f"Document {document_id} chunk {chunk.id} entity extraction failed: {e}")
+            logging.exception(f"Document {document_id} chunk {chunk.id} entity extraction failed: {e}")
             db.rollback()
 
     logging.info(f"Document {document_id}: extracted entities/relations for {processed}/{len(chunks)} chunk(s)")

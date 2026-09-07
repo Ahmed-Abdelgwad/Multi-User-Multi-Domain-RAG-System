@@ -64,7 +64,7 @@ def test_list_documents_scoped_to_domain(db_session, monkeypatch):
     assert len(service.list_documents(db_session, domain_b.id)) == 1
 
 
-def test_process_document_text_extraction_marks_ready_on_success(db_session, monkeypatch):
+def test_process_document_text_extraction_marks_indexing_on_success(db_session, monkeypatch):
     domain = _make_domain(db_session)
     monkeypatch.setattr(service, "upload_bytes", lambda *a, **k: None)
     monkeypatch.setattr(service, "_enqueue_extraction", lambda document_id: None)
@@ -81,7 +81,10 @@ def test_process_document_text_extraction_marks_ready_on_success(db_session, mon
     service.process_document_text_extraction(db_session, document.id)
 
     db_session.refresh(document)
-    assert document.status == DocumentStatus.READY
+    # Not READY yet -- that only happens once chunk_and_embed_task (chained
+    # separately) finishes. See DocumentStatus's docstring for why this
+    # was split into two statuses.
+    assert document.status == DocumentStatus.INDEXING
     assert document.extracted_text == "parsed text"
     assert document.author == "A. Author"
     assert document.error_message is None

@@ -15,14 +15,14 @@ def _make_domain(db_session) -> Domain:
     return domain
 
 
-def _make_ready_document(db_session, domain_id, text: str, tables=None) -> Document:
+def _make_indexing_document(db_session, domain_id, text: str, tables=None) -> Document:
     document = Document(
         id=uuid4(),
         domain_id=domain_id,
         source_type=DocumentSourceType.PDF,
         filename="report.pdf",
         storage_key="k",
-        status=DocumentStatus.READY,
+        status=DocumentStatus.INDEXING,  # the real pre-state: text extraction just finished
         uploaded_by=uuid4(),
         extracted_text=text,
         tables_extracted=tables,
@@ -85,7 +85,7 @@ def test_update_ingestion_config_rejects_overlap_not_smaller_than_group_size(db_
 def test_process_chunk_and_embed_creates_active_chunks(db_session, monkeypatch):
     _stub_embeddings(monkeypatch)
     domain = _make_domain(db_session)
-    document = _make_ready_document(db_session, domain.id, "Para one.\n\nPara two.\n\nPara three.")
+    document = _make_indexing_document(db_session, domain.id, "Para one.\n\nPara two.\n\nPara three.")
 
     service.process_chunk_and_embed(db_session, document.id)
 
@@ -95,13 +95,15 @@ def test_process_chunk_and_embed_creates_active_chunks(db_session, monkeypatch):
     assert all(c.content_type == ChunkContentType.TEXT for c in chunks)
     assert all(c.embedding_model_version == "test-model-v1" for c in chunks)
     assert [c.chunk_index for c in chunks] == [0, 1]
+    db_session.refresh(document)
+    assert document.status == DocumentStatus.READY  # only now -- not at text-extraction time
 
 
 def test_process_chunk_and_embed_includes_table_chunks(db_session, monkeypatch):
     _stub_embeddings(monkeypatch)
     domain = _make_domain(db_session)
     table_markdown = "| a | b |\n| --- | --- |\n| 1 | 2 |"
-    document = _make_ready_document(
+    document = _make_indexing_document(
         db_session, domain.id,
         "Para one.\n\n[TABLE from page 1]\n" + table_markdown,
         tables=[{"page": 1, "markdown": table_markdown}],
@@ -117,7 +119,7 @@ def test_process_chunk_and_embed_includes_table_chunks(db_session, monkeypatch):
 def test_process_chunk_and_embed_reindex_retires_previous_generation(db_session, monkeypatch):
     _stub_embeddings(monkeypatch)
     domain = _make_domain(db_session)
-    document = _make_ready_document(db_session, domain.id, "Para one.\n\nPara two.")
+    document = _make_indexing_document(db_session, domain.id, "Para one.\n\nPara two.")
 
     service.process_chunk_and_embed(db_session, document.id)
     first_generation_ids = {c.id for c in db_session.query(Chunk).filter(Chunk.document_id == document.id)}
@@ -144,10 +146,34 @@ def test_process_chunk_and_embed_missing_document_is_a_noop(db_session, monkeypa
 def test_process_chunk_and_embed_empty_text_creates_no_chunks(db_session, monkeypatch):
     _stub_embeddings(monkeypatch)
     domain = _make_domain(db_session)
-    document = _make_ready_document(db_session, domain.id, "")
+    document = _make_indexing_document(db_session, domain.id, "")
 
     service.process_chunk_and_embed(db_session, document.id)
 
+    assert db_session.query(Chunk).filter(Chunk.document_id == document.id).count() == 0
+    db_session.refresh(document)
+    assert document.status == DocumentStatus.READY  # empty doc is still a terminal, valid state
+
+
+def test_process_chunk_and_embed_failure_leaves_document_indexing_not_ready(db_session, monkeypatch):
+    # Regression test for the status-race this split was introduced to
+    # fix: a chunking/embedding failure must not advance the document
+    # past INDEXING -- and, just as importantly, must not silently look
+    # like a still-in-flight "ready" the way the old single-status design
+    # would have (that state never distinguished "not chunked yet" from
+    # "chunking failed").
+    domain = _make_domain(db_session)
+    document = _make_indexing_document(db_session, domain.id, "Para one.\n\nPara two.")
+
+    from src.chunking import embeddings as embeddings_module
+    def _boom(texts):
+        raise RuntimeError("embedding model unavailable")
+    monkeypatch.setattr(embeddings_module, "embed_texts", _boom)
+
+    service.process_chunk_and_embed(db_session, document.id)  # must not raise
+
+    db_session.refresh(document)
+    assert document.status == DocumentStatus.INDEXING
     assert db_session.query(Chunk).filter(Chunk.document_id == document.id).count() == 0
 
 
@@ -155,7 +181,7 @@ def test_list_chunks_scoped_to_domain_and_only_active(db_session, monkeypatch):
     _stub_embeddings(monkeypatch)
     domain_a = _make_domain(db_session)
     domain_b = _make_domain(db_session)
-    document = _make_ready_document(db_session, domain_a.id, "Para one.\n\nPara two.")
+    document = _make_indexing_document(db_session, domain_a.id, "Para one.\n\nPara two.")
     service.process_chunk_and_embed(db_session, document.id)
     service.process_chunk_and_embed(db_session, document.id)  # retires first generation
 

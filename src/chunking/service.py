@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from src.entities.chunk import Chunk
 from src.entities.document import Document
 from src.entities.domain_ingestion_config import DomainIngestionConfig
+from src.entities.enums import DocumentStatus
 from src.exceptions import InvalidIngestionConfigError
 from src.ingestion.service import get_document_or_raise
 from . import models
@@ -58,19 +59,7 @@ def list_chunks(db: Session, domain_id: UUID, document_id: UUID) -> list[Chunk]:
 
 
 def process_chunk_and_embed(db: Session, document_id: UUID) -> None:
-    """Runs inside the Celery worker (see tasks/pipeline.py), auto-chained
-    after `extract_text_task` succeeds. Paragraph-groups the document's
-    body text (PGC) + folds in any extracted tables as atomic chunks,
-    embeds them, and writes them as the new active generation -- the
-    previous generation (if any, e.g. a re-chunk after a config change)
-    is retired via `is_active=False` rather than deleted (spec 2.4's
-    versioning requirement).
-
-    Failure here is isolated from `Document.status`: text extraction
-    already succeeded (that's what triggered this task), so a
-    chunking/embedding failure is logged and left for a retry/re-index
-    rather than flipping an already-`ready` document back to `failed`.
-    """
+    
     from . import chunker, embeddings
 
     document = db.query(Document).filter(Document.id == document_id).first()
@@ -88,6 +77,8 @@ def process_chunk_and_embed(db: Session, document_id: UUID) -> None:
         )
         if not candidates:
             logging.info(f"Document {document_id} produced no chunks (empty text, no tables)")
+            document.status = DocumentStatus.READY
+            db.commit()
             return
 
         vectors = embeddings.embed_texts([c.content for c in candidates])
@@ -109,8 +100,9 @@ def process_chunk_and_embed(db: Session, document_id: UUID) -> None:
                 embedding_model_version=model_version,
                 is_active=True,
             ))
+        document.status = DocumentStatus.READY
         db.commit()
-        logging.info(f"Document {document_id} chunked+embedded: {len(candidates)} chunks")
+        logging.info(f"Document {document_id} chunked+embedded: {len(candidates)} chunks, now ready")
     except Exception as e:
         logging.error(f"Document {document_id} chunk_and_embed failed: {e}")
         db.rollback()

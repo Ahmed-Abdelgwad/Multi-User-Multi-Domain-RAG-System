@@ -22,6 +22,19 @@ def _stub_reextraction(monkeypatch):
     return calls
 
 
+def _bare_node(name: str) -> dict:
+    # A node_types entry with no description/threshold set, as stored --
+    # matches NodeTypeSpec.model_dump() for a name-only declaration.
+    return {"name": name, "description": None, "threshold": None}
+
+
+def _bare_relation(name: str, source_type: str, target_type: str) -> dict:
+    return {
+        "name": name, "source_type": source_type, "target_type": target_type,
+        "description": None, "threshold": None,
+    }
+
+
 def test_create_schema_version_starts_at_one(db_session, monkeypatch):
     _stub_reextraction(monkeypatch)
     domain = _make_domain(db_session)
@@ -36,8 +49,8 @@ def test_create_schema_version_starts_at_one(db_session, monkeypatch):
 
     assert schema.version == 1
     assert schema.is_active is True
-    assert schema.node_types == ["Person", "Company"]
-    assert schema.relation_types == [{"name": "works_at", "source_type": "Person", "target_type": "Company"}]
+    assert schema.node_types == [_bare_node("Person"), _bare_node("Company")]
+    assert schema.relation_types == [_bare_relation("works_at", "Person", "Company")]
 
 
 def test_create_schema_version_strips_whitespace(db_session, monkeypatch):
@@ -50,7 +63,7 @@ def test_create_schema_version_strips_whitespace(db_session, monkeypatch):
         uuid4(),
     )
 
-    assert schema.node_types == ["Person", "Company"]
+    assert schema.node_types == [_bare_node("Person"), _bare_node("Company")]
 
 
 def test_create_schema_version_deactivates_previous_and_increments(db_session, monkeypatch):
@@ -173,8 +186,8 @@ relation_types:
 
     schema = service.import_schema_from_yaml(db_session, domain.id, raw_yaml, uuid4())
 
-    assert schema.node_types == ["Person", "Company"]
-    assert schema.relation_types == [{"name": "works_at", "source_type": "Person", "target_type": "Company"}]
+    assert schema.node_types == [_bare_node("Person"), _bare_node("Company")]
+    assert schema.relation_types == [_bare_relation("works_at", "Person", "Company")]
 
 
 def test_import_schema_from_yaml_rejects_invalid_yaml(db_session):
@@ -189,3 +202,60 @@ def test_import_schema_from_yaml_rejects_wrong_shape(db_session):
 
     with pytest.raises(InvalidOntologySchemaError):
         service.import_schema_from_yaml(db_session, domain.id, b"- just\n- a\n- list\n", uuid4())
+
+
+def test_create_schema_version_persists_node_type_description_and_threshold(db_session, monkeypatch):
+    # The actual "ontology matches the document's semantic content" fix:
+    # a domain admin can ground an abstract type name (here "role") in
+    # what it actually means for their domain, and tighten its
+    # confidence bar independently of every other type -- see
+    # extraction/extractor.py for where this gets used against the real
+    # model.
+    _stub_reextraction(monkeypatch)
+    domain = _make_domain(db_session)
+
+    schema = service.create_schema_version(
+        db_session, domain.id,
+        models.OntologySchemaCreate(node_types=[
+            {
+                "name": "role",
+                "description": "  A named job title held by a specific person, not a system component.  ",
+                "threshold": 0.8,
+            },
+            "person",  # bare string still allowed alongside a rich spec
+        ]),
+        uuid4(),
+    )
+
+    assert schema.node_types == [
+        {
+            "name": "role",
+            "description": "A named job title held by a specific person, not a system component.",
+            "threshold": 0.8,
+        },
+        _bare_node("person"),
+    ]
+
+
+def test_create_schema_version_persists_relation_type_description_and_threshold(db_session, monkeypatch):
+    _stub_reextraction(monkeypatch)
+    domain = _make_domain(db_session)
+
+    schema = service.create_schema_version(
+        db_session, domain.id,
+        models.OntologySchemaCreate(
+            node_types=["technology", "requirement"],
+            relation_types=[{
+                "name": "used_for", "source_type": "technology", "target_type": "requirement",
+                "description": "The source technology explicitly implements the target requirement.",
+                "threshold": 0.7,
+            }],
+        ),
+        uuid4(),
+    )
+
+    assert schema.relation_types == [{
+        "name": "used_for", "source_type": "technology", "target_type": "requirement",
+        "description": "The source technology explicitly implements the target requirement.",
+        "threshold": 0.7,
+    }]
