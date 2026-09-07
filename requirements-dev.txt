@@ -1,0 +1,10 @@
+-r requirements.txt
+pytest
+pytest-asyncio
+httpx
+black
+ruff
+
+# Test-fixture generation only (a real PDF with embedded text for
+# ingestion extraction tests) -- never imported by application code.
+reportlab

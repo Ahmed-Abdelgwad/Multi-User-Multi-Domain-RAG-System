@@ -1,0 +1,36 @@
+fastapi
+uvicorn
+sqlalchemy
+alembic
+psycopg2-binary
+slowapi
+pydantic-settings
+pyjwt
+passlib
+bcrypt==4.0.1
+python-multipart
+email-validator
+authlib
+httpx
+itsdangerous
+
+# Section 2: Data Ingestion, Chunking & Knowledge Graph Extraction
+celery
+redis
+minio
+pgvector
+langchain-community
+pypdf
+python-docx
+docx2txt
+pdf2image
+pytesseract
+Pillow
+camelot-py
+PyYAML
+# sentence-transformers and gliner2[local] are installed in their own
+# separate pip steps in the Dockerfile, not here -- see the Dockerfile
+# comment for why.
+
+# Only needed if SAML is enabled (SAML_ENABLED=true) -- see src/auth/providers/saml.py
+# python3-saml

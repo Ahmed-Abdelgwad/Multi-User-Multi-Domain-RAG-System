@@ -1,0 +1,120 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/cleanfastapi
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=documents
+      - MINIO_SECURE=false
+      - EMBEDDING_MODEL_NAME=ibm-granite/granite-embedding-97m-multilingual-r2
+      - ENTITY_EXTRACTION_BATCH_INTERVAL_SECONDS=300
+    depends_on:
+      - db
+      - redis
+      - minio
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+    command: sh -c "until alembic upgrade head; do echo 'Waiting for database...'; sleep 2; done && uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  db:
+    # pgvector's official image is plain Postgres + the `vector` extension
+    # pre-installed; everything else about it matches postgres:17.
+    image: pgvector/pgvector:pg17
+    environment:
+      - POSTGRES_DB=cleanfastapi
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/cleanfastapi
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=documents
+      - MINIO_SECURE=false
+      - EMBEDDING_MODEL_NAME=ibm-granite/granite-embedding-97m-multilingual-r2
+      - ENTITY_EXTRACTION_BATCH_INTERVAL_SECONDS=300
+    depends_on:
+      - db
+      - redis
+      - minio
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+    # concurrency=1, not 2: confirmed live (phase 7) that each forked
+    # worker child loads its own independent copy of every lazily-loaded
+    # model (sentence-transformers' embedding model, gliner2's extraction
+    # model) rather than sharing one -- with concurrency=2, two periodic
+    # batch-extraction ticks landing close together each spun up their
+    # own full gliner2 load in parallel, which on this host's tight RAM
+    # (already observed with swap near-exhausted) drove available memory
+    # down to ~300MB and put a real task loading gliner2 for 5+ minutes,
+    # almost certainly memory-thrashing. Single concurrency means at most
+    # one model load (of either model) in memory at a time, at the cost
+    # of serializing task throughput -- an explicit, deliberate tradeoff
+    # for this RAM-constrained host, not an oversight.
+    command: celery -A src.tasks.celery_app worker --loglevel=info --concurrency=1
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/cleanfastapi
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=documents
+      - MINIO_SECURE=false
+      - EMBEDDING_MODEL_NAME=ibm-granite/granite-embedding-97m-multilingual-r2
+      - ENTITY_EXTRACTION_BATCH_INTERVAL_SECONDS=300
+    depends_on:
+      - db
+      - redis
+      - minio
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+    command: celery -A src.tasks.celery_app beat --loglevel=info
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
