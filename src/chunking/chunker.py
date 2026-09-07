@@ -1,26 +1,7 @@
-"""Paragraph Group Chunking (PGC), spec 2.4 -- chosen per the section-2
-plan's literature review (arXiv:2603.06976's own benchmark, cross-checked
-against a second, independently peer-reviewed reproduction, SIGIR 2026
-arXiv:2602.16974: both agree structure-based/paragraph-family chunking is
-the right call for this project's in-corpus, multi-domain retrieval shape).
-
-Pure text-structure logic, no DB/embedding-model dependency -- kept
-separate from `service.py` so it's unit-testable on its own, same
-separation `ingestion/extraction.py` uses relative to `ingestion/service.py`.
-"""
 from dataclasses import dataclass
 from src.entities.enums import ChunkContentType
 
-# The extraction pipeline (src/ingestion/extraction.py) appends a
-# Markdown rendering of each Camelot/python-docx table onto
-# `Document.extracted_text`, behind this exact marker, so table content
-# isn't lost even independent of chunking. PGC must not re-chunk that
-# appendix as running text -- each table already exists as its own
-# structured entry on `Document.tables_extracted` and becomes exactly one
-# atomic chunk (see `_table_chunks` below), never merged/split. Splitting
-# on this marker recovers the plain body text PGC should actually chunk.
 TABLE_APPENDIX_MARKER = "\n\n[TABLE from page "
-
 
 @dataclass(frozen=True)
 class ChunkCandidate:
@@ -36,20 +17,12 @@ def strip_table_appendix(text: str) -> str:
 
 
 def split_into_paragraphs(text: str) -> list[str]:
-    """Splits on blank lines (one or more consecutive newlines), the same
-    boundary `extraction.py`'s PyPDFLoader/Docx2txtLoader output respects
-    for well-formed prose. Empty/whitespace-only paragraphs are dropped.
-    """
+    
     return [p.strip() for p in text.split("\n\n") if p.strip()]
 
 
 def group_paragraphs(paragraphs: list[str], paragraphs_per_chunk: int, overlap: int) -> list[str]:
-    """PGC's core: group `paragraphs_per_chunk` (G) consecutive paragraphs
-    per chunk, advancing by `G - overlap` (O) paragraphs each step so
-    consecutive chunks share `overlap` paragraphs. Matches the paper's
-    formal spec (Table 2: G=2, O=1 by default -- see
-    `DomainIngestionConfig`'s defaults).
-    """
+    
     if not paragraphs:
         return []
     if paragraphs_per_chunk < 1:

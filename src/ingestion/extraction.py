@@ -1,25 +1,3 @@
-"""Pure text/metadata extraction for ingested documents (spec 2.1), built
-on LangChain's document loaders (PyPDFLoader / Docx2txtLoader) -- kept
-from the stack carried over from the discarded prior attempt at this
-project (`langchain-community`), rather than reaching for pypdf/python-docx
-directly. No DB or Celery import here -- kept separate from `service.py`
-so extraction itself is unit-testable without a database or broker.
-
-LangChain's loaders only take a file path (no in-memory bytes), so raw
-bytes (downloaded from MinIO) are spooled to a temp file first. Neither
-loader surfaces document-level metadata (author/creation date) -- that
-part still reads the underlying pypdf/python-docx metadata objects
-directly, since spec 2.1 explicitly requires author/creation-date capture
-at ingest time.
-
-Table extraction is folded in here too, since plain text extraction
-flattens a table's rows/columns into unstructured running text that no
-downstream chunking strategy can recover: PDFs use Camelot (reads the
-PDF's own text/line objects -- only works on text-native pages, so it's
-skipped entirely for the OCR/scanned-PDF path, which has none); DOCX uses
-python-docx's own `document.tables` (its XML already models tables
-structurally, no separate library needed).
-"""
 import logging
 import tempfile
 from dataclasses import dataclass, field
@@ -31,24 +9,14 @@ import docx as python_docx
 from docx.document import Document as DocxDocument
 from src.entities.enums import DocumentSourceType
 
-# Below this many extracted characters, native text extraction is treated
-# as having failed (e.g. a scanned/image-only PDF) and the OCR fallback
-# (spec 2.1: "OCR fallback for scanned PDFs") kicks in instead.
-MIN_NATIVE_TEXT_CHARS = 20
 
-# Camelot's own per-table accuracy score (0-100); below this a "table" is
-# more likely noise (e.g. a body-text paragraph misread as a 1-column
-# table by the `stream` flavor) than a real table.
+MIN_NATIVE_TEXT_CHARS = 20
 MIN_TABLE_ACCURACY = 50
 
 
 @dataclass(frozen=True)
 class TableExtract:
-    # For PDFs this is the real source page number (1-based, from
-    # Camelot). DOCX has no page concept at the XML level without full
-    # layout rendering, so `extract_docx` uses the table's sequential
-    # position in the document instead -- still a stable, meaningful
-    # identifier, just not a literal page.
+    
     page: int
     markdown: str
 
@@ -84,16 +52,8 @@ def _tables_to_appendix(tables: list[TableExtract]) -> str:
 
 
 def _read_pdf_metadata(tmp_path: Path) -> tuple[str | None, datetime | None]:
-    """Reads author/creation-date off pypdf's own metadata object. Found
-    live (not by any fixture) on a real PDF: `meta.creation_date` parses
-    the PDF's raw `/CreationDate` string internally and raises on a
-    malformed one (e.g. a trailing `'` with no UTC-offset minutes, as in
-    `D:20260415123806Z'`) -- pypdf doesn't tolerate every date variant
-    real-world PDF producers emit. Metadata is a bonus on top of the
-    must-succeed text extraction path (same treatment as table
-    extraction below), so any failure here is caught and logged rather
-    than failing the whole document.
-    """
+    
+    
     try:
         meta = PdfReader(str(tmp_path)).metadata
     except Exception as e:
@@ -112,16 +72,7 @@ def _read_pdf_metadata(tmp_path: Path) -> tuple[str | None, datetime | None]:
 
 
 def _reconstruct_paragraphs(text: str) -> str:
-    """Approximates paragraph boundaries in line-based PDF/OCR text: lines
-    not ending in terminal punctuation are wrapped continuations of the
-    same paragraph (joined with a space); a line ending in `.`/`!`/`?`/`:`
-    ends it (a blank line is inserted). Not perfect -- a multi-sentence
-    paragraph becomes several reconstructed "paragraphs" -- but that
-    degrades to sentence-level grouping, which the literature review
-    behind PGC's design found performs comparably to true paragraph-level
-    grouping (see the plan's SIGIR cross-check), a much better fallback
-    than the single giant blob a naive `\n`-preserving join produces.
-    """
+    
     paragraphs: list[str] = []
     current: list[str] = []
     for line in text.split("\n"):
@@ -173,24 +124,11 @@ def extract_pdf(raw_bytes: bytes) -> ExtractionResult:
     if ocr_used:
         text = _ocr_pdf(raw_bytes)
 
-    # PyPDFLoader (and pytesseract's OCR output) has one line per rendered
-    # line on the page -- PDFs carry no real paragraph markup the way
-    # DOCX does (Docx2txtLoader correctly emits blank-line-separated
-    # paragraphs; verified directly against real output). Without this,
-    # `chunking/chunker.py`'s paragraph split (on blank lines) sees the
-    # entire page as one giant "paragraph", silently defeating Paragraph
-    # Group Chunking for every PDF. Reconstructing approximate paragraph
-    # breaks here keeps that contract (text has real `\n\n` boundaries)
-    # true for every source type, so the chunker itself stays a clean,
-    # format-agnostic PGC implementation with no PDF-specific knowledge.
+    
     text = _reconstruct_paragraphs(text)
 
     if tables:
-        # Folded into extracted_text too (not just the structured `tables`
-        # field) so table content is never lost even before anything
-        # downstream is table-aware -- plain full-text search/chunking
-        # still sees it. A mixed PDF (native text + tables) gets both the
-        # PyPDFLoader text and the Camelot tables appended below it.
+        
         text = text + _tables_to_appendix(tables)
 
     return ExtractionResult(
@@ -199,10 +137,7 @@ def extract_pdf(raw_bytes: bytes) -> ExtractionResult:
 
 
 def _ocr_pdf(raw_bytes: bytes) -> str:
-    # Imported lazily: these need the tesseract-ocr/poppler-utils system
-    # packages (see Dockerfile) which aren't required at all for the
-    # common case of text-native PDFs -- only paid for on the scanned-PDF
-    # fallback path.
+    
     from pdf2image import convert_from_bytes
     import pytesseract
 
@@ -211,13 +146,7 @@ def _ocr_pdf(raw_bytes: bytes) -> str:
 
 
 def _extract_tables_camelot(pdf_path: str) -> list[TableExtract]:
-    """Tries Camelot's `lattice` flavor (ruled/bordered tables) first, then
-    falls back to `stream` (whitespace-aligned, borderless tables) only if
-    lattice found nothing worth keeping. Any Camelot/ghostscript failure
-    is caught here and logged rather than failing the whole document --
-    table extraction is a bonus on top of the must-succeed text path, not
-    a dependency of it.
-    """
+    
     import camelot
 
     for flavor in ("lattice", "stream"):

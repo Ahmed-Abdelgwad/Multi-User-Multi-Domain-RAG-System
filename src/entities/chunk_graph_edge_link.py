@@ -6,15 +6,7 @@ from ..database.core import Base
 
 
 class ChunkGraphEdgeLink(Base):
-    """Bidirectional-lookup junction (spec 2.5) for edges specifically --
-    closes the gap a node-only link would leave open: without this,
-    "which chunk asserted this relationship?" has no precise answer (you
-    could only infer it indirectly via the source/target nodes' own chunk
-    links, which is wrong whenever either node also appears, unrelated to
-    this edge, in other chunks/documents). One row per (chunk, edge) pair;
-    `GraphEdge.mention_count` is recomputed from the count of these rows
-    every time one is added (see extraction/service.py).
-    """
+    
     __tablename__ = 'chunk_graph_edge_links'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -6,20 +6,7 @@ from ..database.core import Base
 
 
 class GraphEdge(Base):
-    """A Subject -> Predicate -> Object relationship (spec 2.5) between two
-    `GraphNode`s, constrained to the domain's active ontology
-    (`OntologySchema.relation_types`). Deduped by exact match on
-    `(domain_id, source_node_id, target_node_id, predicate)` -- a repeat
-    extraction of the same triple from a different chunk doesn't insert a
-    new edge; it's reflected as an additional `ChunkGraphEdgeLink` row and
-    a recomputed `mention_count`.
-
-    `mention_count` is not a manually incremented counter (that would
-    drift if a chunk were ever re-processed) -- it's the count of distinct
-    `ChunkGraphEdgeLink` rows for this edge, recomputed on every touch, so
-    it always reflects exactly how many currently-linked chunks assert
-    this relationship.
-    """
+    
     __tablename__ = 'graph_edges'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

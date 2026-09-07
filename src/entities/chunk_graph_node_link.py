@@ -6,12 +6,7 @@ from ..database.core import Base
 
 
 class ChunkGraphNodeLink(Base):
-    """Bidirectional-lookup junction (spec 2.5): which chunk(s) asserted a
-    given graph node's existence, and which nodes a given chunk produced.
-    One row per (chunk, node) pair -- idempotent on re-processing the same
-    chunk (unique constraint below), not incremented on repeat mentions of
-    the same entity within a single chunk.
-    """
+    
     __tablename__ = 'chunk_graph_node_links'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -7,11 +7,7 @@ from .enums import DocumentSourceType, DocumentStatus
 
 
 class Document(Base):
-    """A single ingested source (spec 2.1 Document Ingestion, reused by 2.2
-    Structured Data and 2.3 Web Page ingestion via `source_type`). Always
-    domain-scoped, same as `Domain`/`UserDomainRole` -- retrieval/authz
-    filters chunks by walking back to this row's `domain_id`.
-    """
+    
     __tablename__ = 'documents'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -34,10 +30,7 @@ class Document(Base):
     # instead of re-parsing the raw file.
     extracted_text = Column(Text, nullable=True)
 
-    # Structured PDF tables (Camelot), kept separate from extracted_text
-    # (which also gets a Markdown-rendered copy folded in) so chunking can
-    # treat each table as one atomic chunk instead of re-parsing it back
-    # out of running text. list[{"page": int, "markdown": str}] or None.
+    
     tables_extracted = Column(JSON, nullable=True)
 
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)

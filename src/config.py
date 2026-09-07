@@ -32,22 +32,9 @@ class Settings(BaseSettings):
     minio_bucket: str = "documents"
     minio_secure: bool = False
 
-    # Section 2.4: chunk embedding model. Fixed once for the whole project
-    # (spec 2.4 -- changing it means re-embedding every existing chunk), so
-    # this exists as a documented override point, not something meant to
-    # differ between dev/prod. ibm-granite/granite-embedding-97m-multilingual-r2
-    # (~400-500MB RAM, 384-dim, Apache 2.0) was picked over BAAI/bge-m3
-    # (~2.2GB RAM, 1024-dim) because this host measured only ~1.1GB RAM
-    # available with swap already full when Phase 3 was implemented, and
-    # it benchmarks as the strongest open multilingual retrieval model
-    # under 100M params -- see chunking/embeddings.py.
+    
     embedding_model_name: str = "ibm-granite/granite-embedding-97m-multilingual-r2"
 
-    # Section 2.5: how often (seconds) `batch_extract_entities_task` sweeps
-    # for chunks needing entity/relation extraction. Deliberately not
-    # instant -- the plan's canonical 2.5 text accepts the graph lagging
-    # the vector index "by one job cycle" for MVP, so this doesn't need to
-    # be short; kept low enough (5 min) to make live verification practical.
     entity_extraction_batch_interval_seconds: int = 300
 
 
