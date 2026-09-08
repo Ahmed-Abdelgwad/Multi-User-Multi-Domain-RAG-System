@@ -78,6 +78,28 @@ def make_pdf_with_table_bytes(intro_text: str = "A document with a table") -> by
     return buf.getvalue()
 
 
+def make_pdf_with_text_around_table_bytes(
+    before_text: str = "Text before the table.",
+    after_text: str = "Text after the table.",
+) -> bytes:
+    """A real PDF with prose *both* before and after a bordered table on
+    the same page -- for testing that table extraction preserves true
+    reading order (text -> table -> text), not just "text then table".
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter)
+    data = [["Name", "Role"], ["Bob", "Reader"], ["Carol", "Contributor"]]
+    table = Table(data)
+    table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black)]))
+    styles = getSampleStyleSheet()
+    doc.build([
+        Paragraph(before_text, styles["Normal"]),
+        table,
+        Paragraph(after_text, styles["Normal"]),
+    ])
+    return buf.getvalue()
+
+
 def make_docx_bytes(text: str = "Hello World", author: str | None = None) -> bytes:
     document = python_docx.Document()
     if author:
@@ -100,6 +122,27 @@ def make_docx_with_table_bytes(intro_text: str = "A document with a table") -> b
     for row_idx, row_data in enumerate(data):
         for col_idx, value in enumerate(row_data):
             table.cell(row_idx, col_idx).text = value
+    buf = BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
+def make_docx_with_text_around_table_bytes(
+    before_text: str = "Text before the table.",
+    after_text: str = "Text after the table.",
+) -> bytes:
+    """A real DOCX with prose both before and after a table, in the same
+    body -- for testing that `_docx_elements`'s body-order traversal
+    preserves true reading order.
+    """
+    document = python_docx.Document()
+    document.add_paragraph(before_text)
+    table = document.add_table(rows=2, cols=2)
+    data = [["Name", "Role"], ["Bob", "Reader"]]
+    for row_idx, row_data in enumerate(data):
+        for col_idx, value in enumerate(row_data):
+            table.cell(row_idx, col_idx).text = value
+    document.add_paragraph(after_text)
     buf = BytesIO()
     document.save(buf)
     return buf.getvalue()

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from src.entities.chunk import Chunk
 from src.entities.document import Document
 from src.entities.domain_ingestion_config import DomainIngestionConfig
-from src.entities.enums import DocumentStatus
+from src.entities.enums import ChunkContentType, DocumentStatus
 from src.exceptions import InvalidIngestionConfigError
 from src.ingestion.service import get_document_or_raise
 from . import models
@@ -59,7 +59,6 @@ def list_chunks(db: Session, domain_id: UUID, document_id: UUID) -> list[Chunk]:
 
 
 def process_chunk_and_embed(db: Session, document_id: UUID) -> None:
-    
     from . import chunker, embeddings
 
     document = db.query(Document).filter(Document.id == document_id).first()
@@ -69,32 +68,32 @@ def process_chunk_and_embed(db: Session, document_id: UUID) -> None:
 
     try:
         config = get_or_create_ingestion_config(db, document.domain_id)
-        candidates = chunker.build_chunks(
-            document.extracted_text or "",
-            document.tables_extracted,
+        docs = chunker.build_documents(
+            document.elements_extracted or [],
             config.paragraphs_per_chunk,
             config.paragraph_overlap,
         )
-        if not candidates:
+        if not docs:
             logging.info(f"Document {document_id} produced no chunks (empty text, no tables)")
             document.status = DocumentStatus.READY
             db.commit()
             return
 
-        vectors = embeddings.embed_texts([c.content for c in candidates])
+        embedder = embeddings.SentenceTransformerEmbeddings()
+        vectors = embedder.embed_documents([d.page_content for d in docs])
         model_version = embeddings.embedding_model_version()
 
         db.query(Chunk).filter(
             Chunk.document_id == document_id, Chunk.is_active.is_(True)
         ).update({Chunk.is_active: False})
 
-        for index, (candidate, vector) in enumerate(zip(candidates, vectors)):
+        for index, (doc, vector) in enumerate(zip(docs, vectors)):
             db.add(Chunk(
                 id=uuid4(),
                 document_id=document_id,
                 domain_id=document.domain_id,
-                content=candidate.content,
-                content_type=candidate.content_type,
+                content=doc.page_content,
+                content_type=ChunkContentType(doc.metadata["content_type"]),
                 chunk_index=index,
                 embedding=vector,
                 embedding_model_version=model_version,
@@ -102,7 +101,7 @@ def process_chunk_and_embed(db: Session, document_id: UUID) -> None:
             ))
         document.status = DocumentStatus.READY
         db.commit()
-        logging.info(f"Document {document_id} chunked+embedded: {len(candidates)} chunks, now ready")
+        logging.info(f"Document {document_id} chunked+embedded: {len(docs)} chunks, now ready")
     except Exception as e:
         logging.error(f"Document {document_id} chunk_and_embed failed: {e}")
         db.rollback()

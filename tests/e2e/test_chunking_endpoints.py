@@ -97,14 +97,15 @@ def test_reader_can_list_chunks_after_processing(client: TestClient, platform_ad
     # extraction are stubbed for the same reason as `_enqueue_extraction`
     # above -- MinIO isn't running here either.
     from src.ingestion import extraction as extraction_module
-    from src.ingestion.extraction import ExtractionResult
+    from src.ingestion.extraction import ExtractionResult, DocumentElement
 
     monkeypatch.setattr(ingestion_service, "download_bytes", lambda key: b"raw-bytes")
     monkeypatch.setattr(
         extraction_module,
         "extract",
         lambda source_type, raw: ExtractionResult(
-            text="Para one.\n\nPara two.\n\nPara three.", ocr_used=False, author=None, doc_created_at=None
+            text="Para one.\n\nPara two.\n\nPara three.", ocr_used=False, author=None, doc_created_at=None,
+            elements=[DocumentElement(kind="text", content="Para one.\n\nPara two.\n\nPara three.")],
         ),
     )
 

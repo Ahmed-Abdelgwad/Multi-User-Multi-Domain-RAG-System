@@ -1,28 +1,13 @@
-from dataclasses import dataclass
+from langchain_text_splitters import TextSplitter
+from langchain_core.documents import Document
 from src.entities.enums import ChunkContentType
-
-TABLE_APPENDIX_MARKER = "\n\n[TABLE from page "
-
-@dataclass(frozen=True)
-class ChunkCandidate:
-    content: str
-    content_type: ChunkContentType
-
-
-def strip_table_appendix(text: str) -> str:
-    """Returns `text` with the trailing table-markdown appendix (if any)
-    removed, so PGC only sees the document's real prose.
-    """
-    return text.split(TABLE_APPENDIX_MARKER, 1)[0]
 
 
 def split_into_paragraphs(text: str) -> list[str]:
-    
     return [p.strip() for p in text.split("\n\n") if p.strip()]
 
 
 def group_paragraphs(paragraphs: list[str], paragraphs_per_chunk: int, overlap: int) -> list[str]:
-    
     if not paragraphs:
         return []
     if paragraphs_per_chunk < 1:
@@ -42,28 +27,26 @@ def group_paragraphs(paragraphs: list[str], paragraphs_per_chunk: int, overlap: 
     return groups
 
 
-def _table_chunks(tables: list[dict] | None) -> list[ChunkCandidate]:
-    if not tables:
-        return []
-    return [ChunkCandidate(content=t["markdown"], content_type=ChunkContentType.TABLE) for t in tables]
+class ParagraphGroupTextSplitter(TextSplitter):
+
+    def __init__(self, paragraphs_per_chunk: int, paragraph_overlap: int):
+        super().__init__(chunk_size=10**9, chunk_overlap=0)
+        self.paragraphs_per_chunk = paragraphs_per_chunk
+        self.paragraph_overlap = paragraph_overlap
+
+    def split_text(self, text: str) -> list[str]:
+        return group_paragraphs(split_into_paragraphs(text), self.paragraphs_per_chunk, self.paragraph_overlap)
 
 
-def build_chunks(
-    text: str,
-    tables: list[dict] | None,
-    paragraphs_per_chunk: int,
-    overlap: int,
-) -> list[ChunkCandidate]:
-    """Full PGC pass for one document: paragraph-group the body text, then
-    append each extracted table as its own atomic chunk. Order is text
-    chunks first (in document order) then table chunks -- table position
-    within the body isn't tracked post-extraction, an accepted MVP
-    simplification (noted in the plan).
-    """
-    body_text = strip_table_appendix(text)
-    paragraphs = split_into_paragraphs(body_text)
-    text_chunks = [
-        ChunkCandidate(content=group, content_type=ChunkContentType.TEXT)
-        for group in group_paragraphs(paragraphs, paragraphs_per_chunk, overlap)
-    ]
-    return text_chunks + _table_chunks(tables)
+def build_documents(elements: list[dict], paragraphs_per_chunk: int, overlap: int) -> list[Document]:
+
+    splitter = ParagraphGroupTextSplitter(paragraphs_per_chunk, overlap)
+    documents: list[Document] = []
+    for el in elements:
+        if el["kind"] == "table":
+            documents.append(Document(page_content=el["content"], metadata={"content_type": ChunkContentType.TABLE.value}))
+        else:
+            documents.extend(
+                splitter.create_documents([el["content"]], metadatas=[{"content_type": ChunkContentType.TEXT.value}])
+            )
+    return documents

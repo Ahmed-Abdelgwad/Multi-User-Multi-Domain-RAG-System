@@ -5,8 +5,10 @@ from tests.fixtures_documents import (
     make_pdf_with_malformed_creation_date_bytes,
     make_pdf_with_paragraphs_bytes,
     make_pdf_with_table_bytes,
+    make_pdf_with_text_around_table_bytes,
     make_docx_bytes,
     make_docx_with_table_bytes,
+    make_docx_with_text_around_table_bytes,
 )
 
 
@@ -29,8 +31,9 @@ def test_extract_pdf_survives_malformed_creation_date():
 
 
 def test_reconstruct_paragraphs_joins_wrapped_lines_and_splits_on_terminal_punctuation():
-    # PyPDFLoader's actual output shape (verified live): one line per
-    # rendered line, no blank lines between paragraphs at all.
+    # playa's actual output shape (verified live, same as PyPDFLoader's
+    # before it): one line per rendered line, no blank lines between
+    # paragraphs at all.
     text = "This is a wrapped\nparagraph that spans two lines.\nThis is a second paragraph."
 
     result = extraction._reconstruct_paragraphs(text)
@@ -49,8 +52,8 @@ def test_reconstruct_paragraphs_preserves_existing_blank_lines():
 
 def test_extract_pdf_real_multi_paragraph_pdf_recovers_paragraph_boundaries():
     # Regression test for a real bug found during live docker-compose
-    # verification: PyPDFLoader emits no blank lines between paragraphs
-    # (unlike Docx2txtLoader, confirmed separately), so a real
+    # verification: the PDF text layer emits no blank lines between
+    # paragraphs (unlike Docx2txtLoader, confirmed separately), so a real
     # multi-paragraph PDF's whole body was being treated as a single
     # paragraph by chunking/chunker.py's blank-line split -- silently
     # defeating Paragraph Group Chunking for every PDF.
@@ -64,6 +67,8 @@ def test_extract_pdf_real_multi_paragraph_pdf_recovers_paragraph_boundaries():
 
     recovered = [p for p in result.text.split("\n\n") if p.strip()]
     assert recovered == paragraphs
+    assert len(result.elements) == 1
+    assert result.elements[0].kind == "text"
 
 
 def test_extract_docx_returns_text_and_author():
@@ -105,6 +110,7 @@ def test_extract_pdf_triggers_ocr_fallback_when_native_text_is_sparse(monkeypatc
 
     assert result.ocr_used is True
     assert result.text == "OCR TEXT"
+    assert result.elements == [extraction.DocumentElement(kind="text", content="OCR TEXT")]
 
 
 def test_extract_pdf_scanned_path_never_calls_camelot(monkeypatch):
@@ -133,8 +139,30 @@ def test_extract_pdf_with_real_table_via_camelot():
     table = result.tables[0]
     assert "Alice" in table.markdown
     assert "Domain Admin" in table.markdown
-    assert "[TABLE from page" in result.text
-    assert "Alice" in result.text
+    # The old markdown appendix is gone -- elements is chunking's single
+    # source of truth for tables now, not a second copy glued onto `text`.
+    # `text` is still a full raw page dump (unchanged from before), so a
+    # table's cell text naturally still appears in it once, same as any
+    # other on-page text pypdf/playa would read.
+    assert "[TABLE from page" not in result.text
+
+
+def test_extract_pdf_preserves_text_around_table_in_true_order():
+    # Regression test for the real ordering problem: a table used to
+    # always land after *all* prose regardless of where it actually
+    # appeared. This document has prose both before and after the same
+    # table on one page. Verified separately against two real,
+    # user-supplied PDFs (a CV and a 9-page, 31-table spec document) --
+    # every table landed correctly between its own surrounding sections.
+    result = extraction.extract_pdf(make_pdf_with_text_around_table_bytes(
+        before_text="Text before the table.", after_text="Text after the table.",
+    ))
+
+    kinds = [e.kind for e in result.elements]
+    assert kinds == ["text", "table", "text"]
+    assert "Text before the table." in result.elements[0].content
+    assert "Bob" in result.elements[1].content
+    assert "Text after the table." in result.elements[2].content
 
 
 def test_extract_pdf_camelot_failure_does_not_fail_whole_document(monkeypatch):
@@ -148,6 +176,8 @@ def test_extract_pdf_camelot_failure_does_not_fail_whole_document(monkeypatch):
 
     assert "Hello from a real PDF" in result.text
     assert result.tables == []
+    assert len(result.elements) == 1
+    assert result.elements[0].kind == "text"
 
 
 def test_extract_docx_with_real_table_via_python_docx():
@@ -157,10 +187,25 @@ def test_extract_docx_with_real_table_via_python_docx():
     table = result.tables[0]
     assert "Alice" in table.markdown
     assert "Domain Admin" in table.markdown
-    assert "[TABLE from page" in result.text
+
+
+def test_extract_docx_preserves_text_around_table_in_true_order():
+    # Regression test matching the PDF case above -- DOCX's XML supports
+    # true document-order interleaving natively (see `_docx_elements`).
+    result = extraction.extract_docx(make_docx_with_text_around_table_bytes(
+        before_text="Text before the table.", after_text="Text after the table.",
+    ))
+
+    kinds = [e.kind for e in result.elements]
+    assert kinds == ["text", "table", "text"]
+    assert "Text before the table." in result.elements[0].content
+    assert "Bob" in result.elements[1].content
+    assert "Text after the table." in result.elements[2].content
 
 
 def test_extract_docx_without_table_has_no_tables():
     result = extraction.extract_docx(make_docx_bytes("Hello from a real DOCX"))
 
     assert result.tables == []
+    assert len(result.elements) == 1
+    assert result.elements[0].kind == "text"

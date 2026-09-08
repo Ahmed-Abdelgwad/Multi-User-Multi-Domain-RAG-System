@@ -30,8 +30,13 @@ class Document(Base):
     # instead of re-parsing the raw file.
     extracted_text = Column(Text, nullable=True)
 
-    
+
     tables_extracted = Column(JSON, nullable=True)
+
+    # True reading-order element list ([{"kind": "text"|"table", "content": str}, ...]) --
+    # the single source of truth chunking reads from (see chunking/service.py),
+    # not extracted_text/tables_extracted (kept for display/metadata only).
+    elements_extracted = Column(JSON, nullable=True)
 
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     uploaded_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

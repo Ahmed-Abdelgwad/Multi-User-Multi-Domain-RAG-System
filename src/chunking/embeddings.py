@@ -1,4 +1,5 @@
 from functools import lru_cache
+from langchain_core.embeddings import Embeddings
 from ..config import get_settings
 
 
@@ -23,5 +24,14 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def embedding_model_version() -> str:
-    
+
     return get_settings().embedding_model_name
+
+
+class SentenceTransformerEmbeddings(Embeddings):
+    
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return embed_texts(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return embed_texts([text])[0]

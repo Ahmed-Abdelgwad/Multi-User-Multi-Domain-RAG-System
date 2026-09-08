@@ -15,7 +15,13 @@ def _make_domain(db_session) -> Domain:
     return domain
 
 
-def _make_indexing_document(db_session, domain_id, text: str, tables=None) -> Document:
+def _make_indexing_document(db_session, domain_id, text: str = "", elements: list[dict] | None = None) -> Document:
+    # `elements_extracted` is what process_chunk_and_embed actually reads
+    # (see ingestion/extraction.py's DocumentElement); `text` is a
+    # convenience for the common single-text-block case and still lands
+    # on `extracted_text` too (display/metadata only, unused by chunking).
+    if elements is None:
+        elements = [{"kind": "text", "content": text}] if text else []
     document = Document(
         id=uuid4(),
         domain_id=domain_id,
@@ -25,7 +31,7 @@ def _make_indexing_document(db_session, domain_id, text: str, tables=None) -> Do
         status=DocumentStatus.INDEXING,  # the real pre-state: text extraction just finished
         uploaded_by=uuid4(),
         extracted_text=text,
-        tables_extracted=tables,
+        elements_extracted=elements or None,
     )
     db_session.add(document)
     db_session.commit()
@@ -105,8 +111,10 @@ def test_process_chunk_and_embed_includes_table_chunks(db_session, monkeypatch):
     table_markdown = "| a | b |\n| --- | --- |\n| 1 | 2 |"
     document = _make_indexing_document(
         db_session, domain.id,
-        "Para one.\n\n[TABLE from page 1]\n" + table_markdown,
-        tables=[{"page": 1, "markdown": table_markdown}],
+        elements=[
+            {"kind": "text", "content": "Para one."},
+            {"kind": "table", "content": table_markdown},
+        ],
     )
 
     service.process_chunk_and_embed(db_session, document.id)
@@ -114,6 +122,31 @@ def test_process_chunk_and_embed_includes_table_chunks(db_session, monkeypatch):
     chunks = db_session.query(Chunk).filter(Chunk.document_id == document.id).order_by(Chunk.chunk_index).all()
     assert [c.content_type for c in chunks] == [ChunkContentType.TEXT, ChunkContentType.TABLE]
     assert chunks[1].content == table_markdown
+
+
+def test_process_chunk_and_embed_respects_element_order_around_a_table(db_session, monkeypatch):
+    # Regression test for the real ordering fix: a table now lands
+    # between the text that actually surrounded it (per
+    # `Document.elements_extracted`'s true reading order), not always
+    # after every text chunk.
+    _stub_embeddings(monkeypatch)
+    domain = _make_domain(db_session)
+    table_markdown = "| a | b |\n| --- | --- |\n| 1 | 2 |"
+    document = _make_indexing_document(
+        db_session, domain.id,
+        elements=[
+            {"kind": "text", "content": "Before the table."},
+            {"kind": "table", "content": table_markdown},
+            {"kind": "text", "content": "After the table."},
+        ],
+    )
+
+    service.process_chunk_and_embed(db_session, document.id)
+
+    chunks = db_session.query(Chunk).filter(Chunk.document_id == document.id).order_by(Chunk.chunk_index).all()
+    assert [c.content_type for c in chunks] == [ChunkContentType.TEXT, ChunkContentType.TABLE, ChunkContentType.TEXT]
+    assert chunks[0].content == "Before the table."
+    assert chunks[2].content == "After the table."
 
 
 def test_process_chunk_and_embed_reindex_retires_previous_generation(db_session, monkeypatch):

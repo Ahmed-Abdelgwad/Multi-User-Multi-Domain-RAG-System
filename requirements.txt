@@ -27,6 +27,7 @@ pdf2image
 pytesseract
 Pillow
 camelot-py
+playa-pdf
 PyYAML
 # sentence-transformers and gliner2[local] are installed in their own
 # separate pip steps in the Dockerfile, not here -- see the Dockerfile

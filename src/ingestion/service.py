@@ -109,6 +109,9 @@ def process_document_text_extraction(db: Session, document_id: UUID) -> None:
         document.tables_extracted = [
             {"page": t.page, "markdown": t.markdown} for t in result.tables
         ] or None
+        document.elements_extracted = [
+            {"kind": e.kind, "content": e.content} for e in result.elements
+        ] or None
         document.error_message = None
         db.commit()
         logging.info(

@@ -3,10 +3,13 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
+from langchain_community.document_loaders import Docx2txtLoader
 from pypdf import PdfReader
 import docx as python_docx
 from docx.document import Document as DocxDocument
+from docx.oxml.ns import qn
+from docx.table import Table as DocxTable
+from docx.text.paragraph import Paragraph as DocxParagraph
 from src.entities.enums import DocumentSourceType
 
 
@@ -16,9 +19,16 @@ MIN_TABLE_ACCURACY = 50
 
 @dataclass(frozen=True)
 class TableExtract:
-    
     page: int
     markdown: str
+    bbox: tuple[float, float, float, float] | None = None  # native (bottom-up) PDF coords; None for DOCX
+
+
+@dataclass(frozen=True)
+class DocumentElement:
+    
+    kind: str
+    content: str
 
 
 @dataclass(frozen=True)
@@ -28,6 +38,7 @@ class ExtractionResult:
     author: str | None
     doc_created_at: datetime | None
     tables: list[TableExtract] = field(default_factory=list)
+    elements: list[DocumentElement] = field(default_factory=list)
 
 
 def extract(source_type: DocumentSourceType, raw_bytes: bytes) -> ExtractionResult:
@@ -47,12 +58,7 @@ def _spool_to_tempfile(raw_bytes: bytes, suffix: str) -> Path:
     return Path(tmp.name)
 
 
-def _tables_to_appendix(tables: list[TableExtract]) -> str:
-    return "\n\n" + "\n\n".join(f"[TABLE from page {t.page}]\n{t.markdown}" for t in tables)
-
-
 def _read_pdf_metadata(tmp_path: Path) -> tuple[str | None, datetime | None]:
-    
     
     try:
         meta = PdfReader(str(tmp_path)).metadata
@@ -91,53 +97,136 @@ def _reconstruct_paragraphs(text: str) -> str:
     return "\n\n".join(paragraphs)
 
 
+def _midpoint_y(obj) -> float:
+    return (obj.bbox[1] + obj.bbox[3]) / 2
+
+
+def _page_text_objects(page) -> list:
+    """All of a page's text runs, in true top-to-bottom/left-to-right
+    reading order -- confirmed live that `playa`'s bbox is top-down
+    (smaller y = higher on the page) and one object per rendered line.
+    """
+    return sorted(
+        (obj for obj in page if obj.object_type == "text"),
+        key=lambda o: (_midpoint_y(o), o.bbox[0]),
+    )
+
+
+def _page_plain_text(page) -> str:
+    return "\n".join(obj.chars for obj in _page_text_objects(page))
+
+
+def _split_page_by_tables(page, page_tables: list[TableExtract]) -> list[DocumentElement]:
+    
+    page_height = page.height
+    table_ranges = sorted(
+        ((page_height - t.bbox[3], page_height - t.bbox[1], t) for t in page_tables),
+        key=lambda r: r[0],
+    )
+
+    # Exclude any text run whose midpoint falls inside a table's own
+    # y-range -- that's the table's own cell text, already captured
+    # structurally by Camelot; including it again here would duplicate
+    # it as loose prose.
+    prose = [
+        (obj, _midpoint_y(obj)) for obj in _page_text_objects(page)
+        if not any(top <= _midpoint_y(obj) <= bottom for top, bottom, _ in table_ranges)
+    ]
+
+    segments: list[DocumentElement] = []
+    idx = 0
+    for top, _bottom, table in table_ranges:
+        before = []
+        while idx < len(prose) and prose[idx][1] < top:
+            before.append(prose[idx][0])
+            idx += 1
+        if before:
+            text = _reconstruct_paragraphs("\n".join(o.chars for o in before))
+            if text.strip():
+                segments.append(DocumentElement(kind="text", content=text))
+        segments.append(DocumentElement(kind="table", content=table.markdown))
+
+    remaining = [o for o, _mid in prose[idx:]]
+    if remaining:
+        text = _reconstruct_paragraphs("\n".join(o.chars for o in remaining))
+        if text.strip():
+            segments.append(DocumentElement(kind="text", content=text))
+    return segments
+
+
+def _pdf_elements(playa_pages: list, tables: list[TableExtract]) -> list[DocumentElement]:
+    
+    tables_by_page: dict[int, list[TableExtract]] = {}
+    for t in tables:
+        tables_by_page.setdefault(t.page - 1, []).append(t)
+
+    elements: list[DocumentElement] = []
+    prose_buffer: list[str] = []
+    for page_index, page in enumerate(playa_pages):
+        page_tables = tables_by_page.get(page_index)
+        if not page_tables:
+            prose_buffer.append(_reconstruct_paragraphs(_page_plain_text(page)))
+            continue
+
+        try:
+            segments = _split_page_by_tables(page, page_tables)
+        except Exception as e:
+            
+            logging.warning(f"Positional table split failed for page {page_index}: {e}")
+            prose_buffer.append(_reconstruct_paragraphs(_page_plain_text(page)))
+            segments = [DocumentElement(kind="table", content=t.markdown) for t in page_tables]
+
+        for seg in segments:
+            if seg.kind == "text":
+                prose_buffer.append(seg.content)
+                continue
+            if prose_buffer:
+                elements.append(DocumentElement(kind="text", content="\n\n".join(prose_buffer)))
+                prose_buffer = []
+            elements.append(seg)
+
+    if prose_buffer:
+        elements.append(DocumentElement(kind="text", content="\n\n".join(prose_buffer)))
+    return elements
+
+
 def extract_pdf(raw_bytes: bytes) -> ExtractionResult:
     tmp_path = _spool_to_tempfile(raw_bytes, ".pdf")
+    author, doc_created_at = _read_pdf_metadata(tmp_path)
     try:
-        text = "\n".join(page.page_content for page in PyPDFLoader(str(tmp_path)).load())
+        import playa
 
-        # PyPDFLoader's per-page metadata is just {source, page}; the
-        # document-level fields (author/creation date) come from pypdf's
-        # own metadata object instead.
-        author, doc_created_at = _read_pdf_metadata(tmp_path)
+        with playa.open(str(tmp_path)) as pdf:
+            playa_pages = list(pdf.pages)
+            native_text = "\n".join(_page_plain_text(p) for p in playa_pages)
+            ocr_used = len(native_text.strip()) < MIN_NATIVE_TEXT_CHARS
 
-        ocr_used = len(text.strip()) < MIN_NATIVE_TEXT_CHARS
-        if ocr_used:
-            # Scanned/image-only page: there's no text/line layer for
-            # Camelot to read (it would find nothing, or error), so skip
-            # it entirely and go straight to OCR rather than wasting a
-            # call on a page it can't help with.
-            tables: list[TableExtract] = []
-        else:
-            try:
-                tables = _extract_tables_camelot(str(tmp_path))
-            except Exception as e:
-                # Belt-and-braces on top of the per-flavor try/except
-                # inside _extract_tables_camelot: table extraction must
-                # never fail the whole document, since text extraction
-                # (below) is the must-succeed path.
-                logging.warning(f"Table extraction failed for {tmp_path}: {e}")
-                tables = []
+            if ocr_used:
+                
+                tables: list[TableExtract] = []
+                elements: list[DocumentElement] = []
+            else:
+                try:
+                    tables = _extract_tables_camelot(str(tmp_path))
+                except Exception as e:
+                    
+                    logging.warning(f"Table extraction failed for {tmp_path}: {e}")
+                    tables = []
+                elements = _pdf_elements(playa_pages, tables)
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    text = _reconstruct_paragraphs(_ocr_pdf(raw_bytes)) if ocr_used else _reconstruct_paragraphs(native_text)
     if ocr_used:
-        text = _ocr_pdf(raw_bytes)
-
-    
-    text = _reconstruct_paragraphs(text)
-
-    if tables:
-        
-        text = text + _tables_to_appendix(tables)
+        elements = [DocumentElement(kind="text", content=text)]
 
     return ExtractionResult(
-        text=text, ocr_used=ocr_used, author=author, doc_created_at=doc_created_at, tables=tables
+        text=text, ocr_used=ocr_used, author=author, doc_created_at=doc_created_at,
+        tables=tables, elements=elements,
     )
 
 
 def _ocr_pdf(raw_bytes: bytes) -> str:
-    
     from pdf2image import convert_from_bytes
     import pytesseract
 
@@ -146,7 +235,6 @@ def _ocr_pdf(raw_bytes: bytes) -> str:
 
 
 def _extract_tables_camelot(pdf_path: str) -> list[TableExtract]:
-    
     import camelot
 
     for flavor in ("lattice", "stream"):
@@ -160,6 +248,7 @@ def _extract_tables_camelot(pdf_path: str) -> list[TableExtract]:
             TableExtract(
                 page=int(table.parsing_report.get("page", 0)),
                 markdown=table.df.to_markdown(index=False),
+                bbox=table._bbox,
             )
             for table in found
             if table.parsing_report.get("accuracy", 0) >= MIN_TABLE_ACCURACY
@@ -185,31 +274,41 @@ def extract_docx(raw_bytes: bytes) -> ExtractionResult:
         author = props.author or None
         doc_created_at = props.created
 
-        tables = _extract_tables_python_docx(document)
+        elements = _docx_elements(document)
+        tables = [
+            TableExtract(page=index, markdown=el.content)
+            for index, el in enumerate((e for e in elements if e.kind == "table"), start=1)
+        ]
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    if tables:
-        text = text + _tables_to_appendix(tables)
-
     return ExtractionResult(
-        text=text, ocr_used=False, author=author, doc_created_at=doc_created_at, tables=tables
+        text=text, ocr_used=False, author=author, doc_created_at=doc_created_at,
+        tables=tables, elements=elements,
     )
 
 
-def _extract_tables_python_docx(document: DocxDocument) -> list[TableExtract]:
-    """DOCX's XML already models tables structurally (unlike PDF, where
-    they have to be reconstructed from position), so this reads
-    `document.tables` directly -- no Camelot involved, per the requirement
-    that Camelot stays PDF-only.
-    """
-    tables: list[TableExtract] = []
-    for index, table in enumerate(document.tables, start=1):
-        rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-        if len(rows) < 2 or any(len(row) < 2 for row in rows):
-            continue
-        tables.append(TableExtract(page=index, markdown=_rows_to_markdown(rows)))
-    return tables
+def _docx_elements(document: DocxDocument) -> list[DocumentElement]:
+    
+    elements: list[DocumentElement] = []
+    prose_buffer: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            text = DocxParagraph(child, document).text.strip()
+            if text:
+                prose_buffer.append(text)
+        elif child.tag == qn("w:tbl"):
+            table = DocxTable(child, document)
+            rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+            if len(rows) < 2 or any(len(row) < 2 for row in rows):
+                continue
+            if prose_buffer:
+                elements.append(DocumentElement(kind="text", content="\n\n".join(prose_buffer)))
+                prose_buffer = []
+            elements.append(DocumentElement(kind="table", content=_rows_to_markdown(rows)))
+    if prose_buffer:
+        elements.append(DocumentElement(kind="text", content="\n\n".join(prose_buffer)))
+    return elements
 
 
 def _rows_to_markdown(rows: list[list[str]]) -> str:
