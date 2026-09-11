@@ -115,6 +115,8 @@ def process_extract_entities_for_chunk(
 
     from . import extractor
 
+    from . import graph_store
+
     output = extractor.extract(chunk.content, schema.node_types, schema.relation_types)
 
     nodes_by_key: dict[tuple[str, str], GraphNode] = {}
@@ -125,6 +127,14 @@ def process_extract_entities_for_chunk(
         _append_description(node, chunk.content)
         _link_node_to_chunk(db, chunk.id, node.id)
         nodes_by_key[(entity.type, _normalize(entity.name))] = node
+        try:
+            graph_store.upsert_node_to_graph(node, chunk.id)
+        except Exception as e:
+            # Neo4j is a secondary store here (see graph_store.py) --
+            # a write failure lags that one node until the next
+            # re-extraction re-runs this same upsert; it must never
+            # fail the Postgres write, which is already committed.
+            logging.warning(f"Neo4j upsert failed for node {node.id}: {e}")
 
     for triple in output.triples:
         source = nodes_by_key.get((triple.subject.type, _normalize(triple.subject.name)))
@@ -135,6 +145,10 @@ def process_extract_entities_for_chunk(
             db, chunk.domain_id, source.id, target.id, triple.predicate, schema.version, extractor_version
         )
         _link_edge_to_chunk_and_recompute_mentions(db, chunk.id, edge)
+        try:
+            graph_store.upsert_edge_to_graph(edge, chunk.id)
+        except Exception as e:
+            logging.warning(f"Neo4j upsert failed for edge {edge.id}: {e}")
 
 
 def process_extract_entities_for_document(db: Session, document_id: UUID) -> None:

@@ -33,5 +33,13 @@ PyYAML
 # separate pip steps in the Dockerfile, not here -- see the Dockerfile
 # comment for why.
 
+# Section 3: Retrieval, Ranking & Generation
+langchain-neo4j
+rank_bm25
+langchain-classic
+spacy
+langchain-ollama
+langchain-openai
+
 # Only needed if SAML is enabled (SAML_ENABLED=true) -- see src/auth/providers/saml.py
 # python3-saml

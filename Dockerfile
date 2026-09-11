@@ -45,6 +45,12 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 # the compatible set proven at the time this was pinned.
 RUN pip install --no-cache-dir sentence-transformers==6.0.1
 
+# spaCy's multilingual NER model (spec 3.3, query-time entity
+# recognition) -- downloaded in its own step since it's a model asset,
+# not a pip package; spaCy itself is already installed via
+# requirements.txt by this point.
+RUN python -m spacy download xx_ent_wiki_sm
+
 # gliner2 (phase 7's entity/relation extraction model, spec 2.5) --
 # installed in its own step for the same reason as sentence-transformers
 # above: it shares torch/transformers with it, so resolving it after both

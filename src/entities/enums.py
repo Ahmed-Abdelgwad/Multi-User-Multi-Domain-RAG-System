@@ -47,3 +47,11 @@ class DocumentStatus(str, enum.Enum):
 class ChunkContentType(str, enum.Enum):
     TEXT = "text"
     TABLE = "table"
+
+
+class LLMRoute(str, enum.Enum):
+    """Spec 3.5's hybrid LLM routing: sensitive/internal content stays on
+    a self-hosted model, general queries go to an external API model.
+    """
+    LOCAL = "local"
+    API = "api"

@@ -93,6 +93,42 @@ def reextract_domain_task(self, domain_id: str) -> None:
         db.close()
 
 
+@celery_app.task(name="pipeline.backfill_neo4j_graph")
+def backfill_neo4j_graph_task() -> None:
+    """One-off migration task (spec 3.2): replays every already-extracted
+    graph_node/graph_edge (from before Neo4j existed) through the same
+    upsert_node_to_graph/upsert_edge_to_graph calls the live extraction
+    path uses, once per chunk that actually linked to it -- not run
+    automatically, triggered manually once after Neo4j is stood up.
+    """
+    from src.database.core import SessionLocal
+    from src.entities.graph_node import GraphNode
+    from src.entities.graph_edge import GraphEdge
+    from src.entities.chunk_graph_node_link import ChunkGraphNodeLink
+    from src.entities.chunk_graph_edge_link import ChunkGraphEdgeLink
+    from src.extraction import graph_store
+
+    db = SessionLocal()
+    try:
+        for node in db.query(GraphNode).all():
+            chunk_ids = [
+                row[0] for row in
+                db.query(ChunkGraphNodeLink.chunk_id).filter(ChunkGraphNodeLink.graph_node_id == node.id).all()
+            ]
+            for chunk_id in chunk_ids:
+                graph_store.upsert_node_to_graph(node, chunk_id)
+
+        for edge in db.query(GraphEdge).all():
+            chunk_ids = [
+                row[0] for row in
+                db.query(ChunkGraphEdgeLink.chunk_id).filter(ChunkGraphEdgeLink.graph_edge_id == edge.id).all()
+            ]
+            for chunk_id in chunk_ids:
+                graph_store.upsert_edge_to_graph(edge, chunk_id)
+    finally:
+        db.close()
+
+
 @celery_app.task(name="pipeline.batch_extract_entities")
 def batch_extract_entities_task() -> None:
     """Spec 2.5's "background batch job post-ingest" trigger, run on a

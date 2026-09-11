@@ -81,6 +81,18 @@ class InvalidIngestionConfigError(ChunkingError):
     def __init__(self, message: str):
         super().__init__(status_code=400, detail=message)
 
+class RetrievalError(HTTPException):
+    """Base exception for retrieval/ranking/generation errors (spec section 3)"""
+    pass
+
+class InvalidRetrievalConfigError(RetrievalError):
+    def __init__(self, message: str):
+        super().__init__(status_code=400, detail=message)
+
+class GenerationUnavailableError(RetrievalError):
+    def __init__(self, message: str = "Generation model is unavailable"):
+        super().__init__(status_code=502, detail=message)
+
 class OntologyError(HTTPException):
     """Base exception for graph ontology schema errors"""
     pass

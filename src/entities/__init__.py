@@ -20,8 +20,9 @@ from .graph_node import GraphNode
 from .graph_edge import GraphEdge
 from .chunk_graph_node_link import ChunkGraphNodeLink
 from .chunk_graph_edge_link import ChunkGraphEdgeLink
+from .domain_retrieval_config import DomainRetrievalConfig
 
 __all__ = [
     "User", "Domain", "UserDomainRole", "Document", "Chunk", "DomainIngestionConfig", "OntologySchema",
-    "GraphNode", "GraphEdge", "ChunkGraphNodeLink", "ChunkGraphEdgeLink",
+    "GraphNode", "GraphEdge", "ChunkGraphNodeLink", "ChunkGraphEdgeLink", "DomainRetrievalConfig",
 ]

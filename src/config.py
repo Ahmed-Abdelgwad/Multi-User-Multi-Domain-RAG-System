@@ -37,6 +37,22 @@ class Settings(BaseSettings):
 
     entity_extraction_batch_interval_seconds: int = 300
 
+    # Section 3: Retrieval, Ranking & Generation
+    neo4j_uri: str = "bolt://neo4j:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "neo4jpassword"
+
+    query_ner_model_name: str = "xx_ent_wiki_sm"
+    bm25_cache_ttl_seconds: int = 600
+
+    # 3.5 generation: OpenRouter for the API tier (external, hosted),
+    # Ollama for the local tier (internal/sensitive queries).
+    openrouter_api_key: str | None = None
+    openrouter_model_name: str = "ibm-granite/granite-4.2-8b"
+    local_llm_enabled: bool = False
+    local_llm_model_name: str = "qwen3:4b"
+    ollama_base_url: str = "http://ollama:11434"
+
 
 @lru_cache
 def get_settings() -> Settings:
