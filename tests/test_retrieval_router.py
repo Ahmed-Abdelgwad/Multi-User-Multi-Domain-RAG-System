@@ -10,6 +10,8 @@ class _Config:
     dense_weight = 1.0
     bm25_weight = 0.5
     graph_weight = 2.0
+    entity_centric_ratio_threshold = 0.3
+    entity_centric_graph_boost = 2.0
 
 
 class _FakeBM25:
@@ -67,7 +69,30 @@ def test_select_entities_high_ratio_boosts_graph_weight(db_session, monkeypatch)
         db_session, entities=[("Acme", "ORG")], entity_token_ratio=0.9,
         permitted_domain_ids=[uuid4()], config=_Config(),
     )
-    assert weights == [1.0, 0.5, 2.0 * router.ENTITY_CENTRIC_GRAPH_BOOST]
+    assert weights == [1.0, 0.5, 2.0 * _Config.entity_centric_graph_boost]
+
+
+def test_select_entities_uses_domain_specific_threshold_and_boost(db_session, monkeypatch):
+    # A domain that considers 0.8+ entity coverage "entity-centric" and
+    # boosts 5x instead of the _Config default's 0.3/2.0 -- confirms
+    # these are read from the per-domain config, not a module constant.
+    monkeypatch.setattr(router, "get_bm25_retriever", lambda *a, **k: _FakeBM25())
+
+    class _StrictConfig(_Config):
+        entity_centric_ratio_threshold = 0.8
+        entity_centric_graph_boost = 5.0
+
+    _retrievers, below = router.select_retrievers_and_weights(
+        db_session, entities=[("Acme", "ORG")], entity_token_ratio=0.5,
+        permitted_domain_ids=[uuid4()], config=_StrictConfig(),
+    )
+    assert below == [1.0, 0.5, 2.0]  # under this domain's 0.8 threshold -> no boost
+
+    _retrievers, above = router.select_retrievers_and_weights(
+        db_session, entities=[("Acme", "ORG")], entity_token_ratio=0.9,
+        permitted_domain_ids=[uuid4()], config=_StrictConfig(),
+    )
+    assert above == [1.0, 0.5, 2.0 * 5.0]
 
 
 def test_select_skips_bm25_when_none(db_session, monkeypatch):

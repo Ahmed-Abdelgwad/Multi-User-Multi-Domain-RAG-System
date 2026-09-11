@@ -28,7 +28,12 @@ services:
       - redis
       - minio
       - neo4j
-      - ollama
+      # NOT ollama: its image (~2.5GB, CUDA-heavy base) repeatedly failed
+      # to pull on this host's connection, and RAM is already
+      # swap-saturated without it. Bring `ollama` up separately
+      # (`docker compose up -d ollama`) once network/RAM allow -- api
+      # doesn't need to wait on it since local_llm_enabled defaults to
+      # false (API/OpenRouter tier only, until then).
     volumes:
       - ./src:/app/src
       - ./alembic:/app/alembic

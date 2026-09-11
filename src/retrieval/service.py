@@ -38,6 +38,8 @@ def update_retrieval_config(
     config.dense_weight = update.dense_weight
     config.bm25_weight = update.bm25_weight
     config.graph_weight = update.graph_weight
+    config.entity_centric_ratio_threshold = update.entity_centric_ratio_threshold
+    config.entity_centric_graph_boost = update.entity_centric_graph_boost
     config.llm_routing_default = update.llm_routing_default
     config.llm_routing_sensitive_keywords = update.llm_routing_sensitive_keywords
     config.confidence_threshold = update.confidence_threshold

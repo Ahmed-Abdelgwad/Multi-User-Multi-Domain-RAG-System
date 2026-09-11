@@ -9,6 +9,8 @@ class DomainRetrievalConfigResponse(BaseModel):
     dense_weight: float
     bm25_weight: float
     graph_weight: float
+    entity_centric_ratio_threshold: float
+    entity_centric_graph_boost: float
     llm_routing_default: LLMRoute
     llm_routing_sensitive_keywords: list[str]
     confidence_threshold: float
@@ -16,13 +18,16 @@ class DomainRetrievalConfigResponse(BaseModel):
 
 
 class DomainRetrievalConfigUpdate(BaseModel):
-    # Spec 3.4's per-domain RRF signal weights, 3.5's routing rule, and
-    # 3.6's confidence threshold -- validated together in the service
-    # layer (at least one weight must be > 0, mirroring
-    # EnsembleRetriever's own validation) since that rule spans fields.
+    # Spec 3.4's per-domain RRF signal weights + entity-centric routing
+    # rule, 3.5's routing rule, and 3.6's confidence threshold --
+    # validated together in the service layer (at least one weight must
+    # be > 0, mirroring EnsembleRetriever's own validation) since that
+    # rule spans fields.
     dense_weight: float = Field(ge=0.0)
     bm25_weight: float = Field(ge=0.0)
     graph_weight: float = Field(ge=0.0)
+    entity_centric_ratio_threshold: float = Field(ge=0.0, le=1.0)
+    entity_centric_graph_boost: float = Field(ge=0.0)
     llm_routing_default: LLMRoute
     llm_routing_sensitive_keywords: list[str] = Field(default_factory=list)
     confidence_threshold: float = Field(ge=0.0, le=1.0)

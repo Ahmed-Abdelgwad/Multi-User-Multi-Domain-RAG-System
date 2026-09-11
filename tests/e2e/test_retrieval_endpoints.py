@@ -26,6 +26,7 @@ def test_domain_admin_can_update_retrieval_config(client: TestClient, platform_a
         headers=platform_admin_headers,
         json={
             "dense_weight": 0.5, "bm25_weight": 0.5, "graph_weight": 2.0,
+            "entity_centric_ratio_threshold": 0.6, "entity_centric_graph_boost": 3.0,
             "llm_routing_default": "local",
             "llm_routing_sensitive_keywords": ["salary"],
             "confidence_threshold": 0.7,
@@ -35,6 +36,8 @@ def test_domain_admin_can_update_retrieval_config(client: TestClient, platform_a
     assert response.status_code == 200
     body = response.json()
     assert body["graph_weight"] == 2.0
+    assert body["entity_centric_ratio_threshold"] == 0.6
+    assert body["entity_centric_graph_boost"] == 3.0
     assert body["llm_routing_default"] == "local"
 
 
@@ -46,6 +49,7 @@ def test_update_retrieval_config_rejects_all_zero_weights(client: TestClient, pl
         headers=platform_admin_headers,
         json={
             "dense_weight": 0, "bm25_weight": 0, "graph_weight": 0,
+            "entity_centric_ratio_threshold": 0.3, "entity_centric_graph_boost": 2.0,
             "llm_routing_default": "api",
             "confidence_threshold": 0.5,
         },
@@ -63,6 +67,7 @@ def test_contributor_cannot_update_retrieval_config(client: TestClient, platform
         headers=contributor_headers,
         json={
             "dense_weight": 1.0, "bm25_weight": 1.0, "graph_weight": 1.0,
+            "entity_centric_ratio_threshold": 0.3, "entity_centric_graph_boost": 2.0,
             "llm_routing_default": "api",
             "confidence_threshold": 0.5,
         },

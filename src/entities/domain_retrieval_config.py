@@ -21,6 +21,12 @@ class DomainRetrievalConfig(Base):
     bm25_weight = Column(Float, nullable=False, default=1.0)
     graph_weight = Column(Float, nullable=False, default=1.0)
 
+    # 3.4's entity-centric routing rule, per domain (was a hardcoded
+    # module constant in router.py -- flagged as a partial-compliance
+    # gap and closed here).
+    entity_centric_ratio_threshold = Column(Float, nullable=False, default=0.3)
+    entity_centric_graph_boost = Column(Float, nullable=False, default=2.0)
+
     llm_routing_default = Column(Enum(LLMRoute), nullable=False, default=LLMRoute.API)
     llm_routing_sensitive_keywords = Column(JSON, nullable=False, default=list)
 
