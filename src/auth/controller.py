@@ -10,6 +10,8 @@ from ..database.core import DbSession
 from ..rate_limiter import limiter
 from ..config import get_settings
 from ..entities.enums import UserType
+from ..entities.user import User
+from ..authz.dependencies import require_platform_admin
 
 router = APIRouter(
     prefix='/auth',
@@ -44,11 +46,21 @@ async def sso_callback(pool: UserPool, request: Request, db: DbSession):
     identity = await OIDCProvider(pool).handle_callback(request)
     user_type = UserType.INTERNAL if pool == "internal" else UserType.EXTERNAL
     user = service.find_or_create_sso_user(db, user_type, identity)
-    settings = get_settings()
-    token = service.create_access_token(
-        user.email, user.id, timedelta(minutes=settings.access_token_expire_minutes)
-    )
+    ttl = service.ttl_minutes_for_pool(db, user.user_type)
+    token = service.create_access_token(user.email, user.id, timedelta(minutes=ttl))
     return models.Token(access_token=token, token_type='bearer')
+
+
+@router.get("/session-policy/", response_model=models.SessionPolicyResponse)
+def get_session_policy(db: DbSession, _admin: User = Depends(require_platform_admin)):
+    return service.get_or_create_session_policy(db)
+
+
+@router.put("/session-policy/", response_model=models.SessionPolicyResponse)
+def update_session_policy(
+    db: DbSession, update: models.SessionPolicyUpdate, admin: User = Depends(require_platform_admin)
+):
+    return service.update_session_policy(db, update, admin.id)
 
 
 

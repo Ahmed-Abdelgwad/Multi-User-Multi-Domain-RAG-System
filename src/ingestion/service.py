@@ -6,6 +6,7 @@ from src.entities.document import Document
 from src.entities.enums import DocumentSourceType, DocumentStatus
 from src.exceptions import DocumentNotFoundError, UnsupportedDocumentTypeError
 from src.storage.core import upload_bytes, download_bytes
+from src.domains.service import raise_if_archived
 
 # Phase 2 (spec 2.1) only handles PDF/DOCX. CSV/XLSX are accepted by the
 # entity/enum already (DocumentSourceType) but wired up in phase 4 (spec
@@ -53,6 +54,7 @@ def create_document(
     content_type: str | None,
     raw_bytes: bytes,
 ) -> Document:
+    raise_if_archived(db, domain_id)
 
     source_type = _resolve_source_type(filename)
     storage_key = f"{domain_id}/{uuid4()}/{filename}"

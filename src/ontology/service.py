@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 from src.entities.ontology_schema import OntologySchema
 from src.exceptions import InvalidOntologySchemaError, OntologySchemaNotFoundError
+from src.domains.service import raise_if_archived
 from . import models
 
 
@@ -74,6 +75,7 @@ def list_schema_versions(db: Session, domain_id: UUID) -> list[OntologySchema]:
 def create_schema_version(
     db: Session, domain_id: UUID, create: models.OntologySchemaCreate, created_by: UUID
 ) -> OntologySchema:
+    raise_if_archived(db, domain_id)
     node_types, relation_types = _validate_and_normalize(create)
 
     previous_active = (

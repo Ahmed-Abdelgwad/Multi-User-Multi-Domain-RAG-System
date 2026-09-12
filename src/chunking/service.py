@@ -8,6 +8,7 @@ from src.entities.domain_ingestion_config import DomainIngestionConfig
 from src.entities.enums import ChunkContentType, DocumentStatus
 from src.exceptions import InvalidIngestionConfigError
 from src.ingestion.service import get_document_or_raise
+from src.domains.service import raise_if_archived
 from . import models
 
 
@@ -31,6 +32,7 @@ def get_or_create_ingestion_config(db: Session, domain_id: UUID) -> DomainIngest
 def update_ingestion_config(
     db: Session, domain_id: UUID, update: models.DomainIngestionConfigUpdate, updated_by: UUID
 ) -> DomainIngestionConfig:
+    raise_if_archived(db, domain_id)
     if update.paragraph_overlap >= update.paragraphs_per_chunk:
         raise InvalidIngestionConfigError("paragraph_overlap must be less than paragraphs_per_chunk")
 

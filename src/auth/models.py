@@ -1,5 +1,6 @@
 from uuid import UUID
-from pydantic import BaseModel, EmailStr
+from datetime import datetime
+from pydantic import BaseModel, EmailStr, Field
 
 class RegisterUserRequest(BaseModel):
     email: EmailStr
@@ -18,4 +19,15 @@ class TokenData(BaseModel):
         if self.user_id:
             return UUID(self.user_id)
         return None
-    
+
+
+class SessionPolicyResponse(BaseModel):
+    internal_token_ttl_minutes: int
+    external_token_ttl_minutes: int
+    updated_at: datetime
+
+
+class SessionPolicyUpdate(BaseModel):
+    internal_token_ttl_minutes: int = Field(gt=0)
+    external_token_ttl_minutes: int = Field(gt=0)
+

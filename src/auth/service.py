@@ -6,7 +6,9 @@ from passlib.context import CryptContext
 import jwt
 from jwt import PyJWTError
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from src.entities.user import User
+from src.entities.session_policy import SessionPolicy
 from src.entities.enums import UserType, AuthProviderType
 from . import models
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
@@ -81,12 +83,61 @@ def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]) -> models.To
 CurrentUser = Annotated[models.TokenData, Depends(get_current_user)]
 
 
+def get_or_create_session_policy(db: Session) -> SessionPolicy:
+    """Spec 1.1's "configurable session token TTL", one global singleton
+    row (no domain_id, sessions aren't domain-scoped). Bootstrapped from
+    ACCESS_TOKEN_EXPIRE_MINUTES for both pools the first time it's read,
+    so nothing changes until a platform admin actually edits it.
+
+    The query-then-insert below is still racy on its own (two concurrent
+    first-ever calls can both see no row) -- SessionPolicy's `singleton`
+    UNIQUE constraint is what actually prevents a second row; a lost race
+    surfaces here as IntegrityError, and the loser just reads the row the
+    winner committed instead of erroring out.
+    """
+    policy = db.query(SessionPolicy).first()
+    if policy:
+        return policy
+
+    policy = SessionPolicy(
+        id=uuid4(),
+        internal_token_ttl_minutes=ACCESS_TOKEN_EXPIRE_MINUTES,
+        external_token_ttl_minutes=ACCESS_TOKEN_EXPIRE_MINUTES,
+    )
+    db.add(policy)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return db.query(SessionPolicy).first()
+    db.refresh(policy)
+    return policy
+
+
+def update_session_policy(db: Session, update: models.SessionPolicyUpdate, updated_by: UUID) -> SessionPolicy:
+    policy = get_or_create_session_policy(db)
+    policy.internal_token_ttl_minutes = update.internal_token_ttl_minutes
+    policy.external_token_ttl_minutes = update.external_token_ttl_minutes
+    policy.updated_by = updated_by
+    policy.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(policy)
+    logging.info(f"Session policy updated by {updated_by}: internal={policy.internal_token_ttl_minutes}m, external={policy.external_token_ttl_minutes}m")
+    return policy
+
+
+def ttl_minutes_for_pool(db: Session, user_type: UserType) -> int:
+    policy = get_or_create_session_policy(db)
+    return policy.internal_token_ttl_minutes if user_type == UserType.INTERNAL else policy.external_token_ttl_minutes
+
+
 def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
                                 db: Session) -> models.Token:
     user = authenticate_user(form_data.username, form_data.password, db)
     if not user:
         raise AuthenticationError()
-    token = create_access_token(user.email, user.id, timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    ttl = ttl_minutes_for_pool(db, user.user_type)
+    token = create_access_token(user.email, user.id, timedelta(minutes=ttl))
     return models.Token(access_token=token, token_type='bearer')
 
 

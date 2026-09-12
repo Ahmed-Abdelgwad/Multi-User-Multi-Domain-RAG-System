@@ -16,6 +16,17 @@ def get_domain_or_raise(db: Session, domain_id: UUID) -> Domain:
     return domain
 
 
+def raise_if_archived(db: Session, domain_id: UUID) -> None:
+    """Spec 1.3: an archived domain is frozen for new activity -- called
+    from every write path (uploads, config/schema changes) and from the
+    retrieval path (authz/retrieval.py), not just role assignment. Reads
+    (domain detail, existing chunks/graph data, config GETs) are left
+    alone -- archiving stops new use, it doesn't hide history.
+    """
+    if get_domain_or_raise(db, domain_id).is_archived:
+        raise DomainArchivedError(domain_id)
+
+
 def create_domain(db: Session, domain_create: models.DomainCreate, created_by: UUID) -> Domain:
     if db.query(Domain).filter(Domain.name == domain_create.name).first():
         raise DuplicateDomainNameError(domain_create.name)
@@ -68,9 +79,7 @@ def list_domain_roles(db: Session, domain_id: UUID) -> list[UserDomainRole]:
 
 
 def assign_role(db: Session, domain_id: UUID, request: models.AssignRoleRequest, granted_by: UUID) -> UserDomainRole:
-    domain = get_domain_or_raise(db, domain_id)
-    if domain.is_archived:
-        raise DomainArchivedError(domain_id)
+    raise_if_archived(db, domain_id)
 
     existing = (
         db.query(UserDomainRole)

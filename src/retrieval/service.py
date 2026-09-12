@@ -6,6 +6,7 @@ from src.entities.domain_retrieval_config import DomainRetrievalConfig
 from src.exceptions import InvalidRetrievalConfigError
 from src.auth.models import TokenData
 from src.authz.retrieval import build_retrieval_filter
+from src.domains.service import raise_if_archived
 from . import models
 
 RETRIEVAL_TOP_K = 5
@@ -31,6 +32,7 @@ def get_or_create_retrieval_config(db: Session, domain_id: UUID) -> DomainRetrie
 def update_retrieval_config(
     db: Session, domain_id: UUID, update: models.DomainRetrievalConfigUpdate
 ) -> DomainRetrievalConfig:
+    raise_if_archived(db, domain_id)
     if update.dense_weight == 0 and update.bm25_weight == 0 and update.graph_weight == 0:
         raise InvalidRetrievalConfigError("at least one of dense_weight/bm25_weight/graph_weight must be > 0")
 
