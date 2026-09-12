@@ -46,7 +46,10 @@ def test_domain_admin_can_get_default_ingestion_config(client: TestClient, platf
     assert body["paragraph_overlap"] == 1
 
 
-def test_domain_admin_can_update_ingestion_config(client: TestClient, platform_admin_headers):
+def test_domain_admin_can_update_ingestion_config(client: TestClient, platform_admin_headers, monkeypatch):
+    # A successful update now enqueues reindex_domain_chunks_task -- stub
+    # it so this e2e test never tries to reach a real Celery broker.
+    monkeypatch.setattr(chunking_service, "_enqueue_reindex", lambda domain_id: None)
     domain_id = _create_domain(client, platform_admin_headers, name="cfg-domain-update").json()["id"]
 
     response = client.put(

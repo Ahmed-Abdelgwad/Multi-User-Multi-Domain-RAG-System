@@ -2,6 +2,7 @@ from uuid import uuid4
 from src.tasks.celery_app import celery_app
 from src.tasks.pipeline import (
     ping, extract_text_task, chunk_and_embed_task, reextract_domain_task, batch_extract_entities_task,
+    reindex_domain_chunks_task,
 )
 
 
@@ -137,6 +138,48 @@ def test_reextract_domain_task_resets_active_chunks_only(db_session, monkeypatch
     from src.entities.chunk import Chunk
     assert db_session.query(Chunk).filter(Chunk.id == active_chunk_id).one().entities_extracted_at is None
     assert db_session.query(Chunk).filter(Chunk.id == retired_chunk_id).one().entities_extracted_at is not None
+
+
+def test_reindex_domain_chunks_task_fans_out_to_ready_documents_only(db_session, monkeypatch):
+    """Spec 2.4's re-indexing trigger, mirroring reextract_domain_task's
+    shape: fans out to chunk_and_embed_task for every `ready` document in
+    the domain (each run retires its previous chunk generation and
+    re-chunks with the domain's current config, see
+    chunking/service.py::process_chunk_and_embed) -- a still-processing
+    document and a document in a different domain are left alone.
+    """
+    import src.database.core as database_core
+    from src.entities.domain import Domain
+    from src.entities.document import Document
+    from src.entities.enums import DocumentSourceType, DocumentStatus
+
+    monkeypatch.setattr(database_core, "SessionLocal", lambda: db_session)
+    domain = Domain(id=uuid4(), name=f"domain-{uuid4()}", created_by=uuid4())
+    other_domain = Domain(id=uuid4(), name=f"domain-{uuid4()}", created_by=uuid4())
+    db_session.add_all([domain, other_domain])
+
+    ready_document = Document(
+        id=uuid4(), domain_id=domain.id, source_type=DocumentSourceType.PDF,
+        filename="ready.pdf", storage_key="k1", status=DocumentStatus.READY, uploaded_by=uuid4(),
+    )
+    processing_document = Document(
+        id=uuid4(), domain_id=domain.id, source_type=DocumentSourceType.PDF,
+        filename="processing.pdf", storage_key="k2", status=DocumentStatus.PROCESSING, uploaded_by=uuid4(),
+    )
+    other_domain_ready_document = Document(
+        id=uuid4(), domain_id=other_domain.id, source_type=DocumentSourceType.PDF,
+        filename="other.pdf", storage_key="k3", status=DocumentStatus.READY, uploaded_by=uuid4(),
+    )
+    db_session.add_all([ready_document, processing_document, other_domain_ready_document])
+    db_session.commit()
+    domain_id, ready_document_id = domain.id, ready_document.id  # captured before the task detaches them
+
+    fanned_out = []
+    monkeypatch.setattr(chunk_and_embed_task, "delay", lambda document_id: fanned_out.append(document_id))
+
+    reindex_domain_chunks_task(str(domain_id))
+
+    assert fanned_out == [str(ready_document_id)]
 
 
 def test_batch_extract_entities_task_processes_only_unextracted_documents(db_session, monkeypatch):

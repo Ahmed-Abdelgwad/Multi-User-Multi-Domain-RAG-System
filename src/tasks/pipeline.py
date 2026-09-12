@@ -14,6 +14,18 @@ resetting `Chunk.entities_extracted_at` back to NULL rather than running
 or enqueuing extraction itself -- the next batch tick picks those chunks
 back up naturally, so there's only ever one code path that actually calls
 the (heavy, RAM-hungry) extractor.
+
+`reindex_domain_chunks_task` closes spec 2.4's analogous requirement
+("chunk versioning supports re-indexing on ... schema change"): a
+domain's chunking config (paragraphs_per_chunk/paragraph_overlap)
+changing invalidates every chunk `chunk_and_embed_task` already produced
+for that domain. Unlike entity extraction there's no separate periodic
+sweep to piggyback on -- re-chunking is document-granular already (see
+`chunk_and_embed_task`), and `process_chunk_and_embed` is already
+idempotent/re-runnable (retires the previous generation, keeps history --
+see chunking/service.py), so this task just fans back out to the same
+task per `ready` document in the domain instead of introducing a second
+sweep mechanism.
 """
 from uuid import UUID
 from .celery_app import celery_app
@@ -91,6 +103,33 @@ def reextract_domain_task(self, domain_id: str) -> None:
         db.commit()
     finally:
         db.close()
+
+
+@celery_app.task(name="pipeline.reindex_domain_chunks", bind=True, max_retries=2, default_retry_delay=10)
+def reindex_domain_chunks_task(self, domain_id: str) -> None:
+    """Fired whenever a domain's chunking config changes (spec 2.4). Fans
+    out to `chunk_and_embed_task` for every `ready` document in the
+    domain -- each run re-chunks with the domain's current config and
+    retires the previous chunk generation (see
+    chunking/service.py::process_chunk_and_embed), the same versioning
+    behavior a fresh document already goes through.
+    """
+    from src.database.core import SessionLocal
+    from src.entities.document import Document
+    from src.entities.enums import DocumentStatus
+
+    db = SessionLocal()
+    try:
+        document_ids = [
+            row[0] for row in db.query(Document.id)
+            .filter(Document.domain_id == UUID(domain_id), Document.status == DocumentStatus.READY)
+            .all()
+        ]
+    finally:
+        db.close()
+
+    for document_id in document_ids:
+        chunk_and_embed_task.delay(str(document_id))
 
 
 @celery_app.task(name="pipeline.backfill_neo4j_graph")

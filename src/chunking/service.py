@@ -42,7 +42,16 @@ def update_ingestion_config(
     db.commit()
     db.refresh(config)
     logging.info(f"Ingestion config for domain {domain_id} updated by {updated_by}")
+
+    _enqueue_reindex(domain_id)
     return config
+
+
+def _enqueue_reindex(domain_id: UUID) -> None:
+    # Imported lazily to avoid a chunking<->tasks import cycle, same
+    # rationale as ontology/service.py's _enqueue_reextraction.
+    from src.tasks.pipeline import reindex_domain_chunks_task
+    reindex_domain_chunks_task.delay(str(domain_id))
 
 
 def list_chunks(db: Session, domain_id: UUID, document_id: UUID) -> list[Chunk]:

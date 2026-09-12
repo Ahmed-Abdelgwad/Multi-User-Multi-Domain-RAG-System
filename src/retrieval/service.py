@@ -73,20 +73,26 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
         db, entities, entity_token_ratio, permitted, config, k=RETRIEVAL_TOP_K
     )
 
+    # Invoke each retriever ourselves (once) and hand the results straight
+    # to EnsembleRetriever's own weighted_reciprocal_rank -- same genuine
+    # RRF fusion as calling ensemble.invoke(query) would do, but without
+    # letting it re-invoke every retriever internally. That matters here
+    # because its dedup-by-chunk_id keeps only the first retriever's
+    # Document per chunk (vector, listed first), silently dropping
+    # graph_score for a chunk vector also matched; previously that was
+    # patched by invoking Neo4jGraphChunkRetriever a *second* time just to
+    # recover it. Keeping our one set of per-retriever results around
+    # instead means the backfill below is free -- no second Cypher round
+    # trip per entity-bearing query.
+    doc_lists = [r.invoke(query) for r in retrievers]
     ensemble = EnsembleRetriever(retrievers=retrievers, weights=weights, id_key="chunk_id")
-    documents = ensemble.invoke(query)[:RETRIEVAL_TOP_K]
+    documents = ensemble.weighted_reciprocal_rank(doc_lists)[:RETRIEVAL_TOP_K]
 
-    # EnsembleRetriever dedups on chunk_id keeping the first retriever's
-    # Document (vector, listed first), so a chunk found by both vector
-    # and graph loses its graph_score. Backfill it so compute_confidence
-    # (3.6) sees both signals.
     if entities:
-        graph_scores = {
-            d.metadata["chunk_id"]: d.metadata["graph_score"]
-            for d in Neo4jGraphChunkRetriever(
-                db=db, permitted_domain_ids=permitted, entities=entities, k=RETRIEVAL_TOP_K
-            ).invoke(query)
-        }
+        graph_docs = next(
+            docs for r, docs in zip(retrievers, doc_lists) if isinstance(r, Neo4jGraphChunkRetriever)
+        )
+        graph_scores = {d.metadata["chunk_id"]: d.metadata["graph_score"] for d in graph_docs}
         for d in documents:
             if d.metadata["chunk_id"] in graph_scores:
                 d.metadata.setdefault("graph_score", graph_scores[d.metadata["chunk_id"]])

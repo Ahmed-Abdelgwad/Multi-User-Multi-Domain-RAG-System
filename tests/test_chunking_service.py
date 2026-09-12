@@ -38,6 +38,15 @@ def _make_indexing_document(db_session, domain_id, text: str = "", elements: lis
     return document
 
 
+def _stub_reindex(monkeypatch):
+    """Unit tests only exercise the chunking service, not Celery -- stub
+    the enqueue call so it never tries to reach a real broker.
+    """
+    calls = []
+    monkeypatch.setattr(service, "_enqueue_reindex", lambda domain_id: calls.append(domain_id))
+    return calls
+
+
 def _stub_embeddings(monkeypatch, dim: int = 4):
     from src.chunking import embeddings as embeddings_module
 
@@ -66,7 +75,8 @@ def test_get_or_create_ingestion_config_is_idempotent(db_session):
     assert first.id == second.id
 
 
-def test_update_ingestion_config_persists_new_values(db_session):
+def test_update_ingestion_config_persists_new_values(db_session, monkeypatch):
+    _stub_reindex(monkeypatch)
     domain = _make_domain(db_session)
     updated_by = uuid4()
 
@@ -79,7 +89,23 @@ def test_update_ingestion_config_persists_new_values(db_session):
     assert config.updated_by == updated_by
 
 
-def test_update_ingestion_config_rejects_overlap_not_smaller_than_group_size(db_session):
+def test_update_ingestion_config_enqueues_reindex(db_session, monkeypatch):
+    # Spec 2.4: a chunking config change must trigger re-indexing (was
+    # missing entirely -- router.py's entity-centric threshold was the
+    # only other "configurable per domain" gap; this closes the one for
+    # chunking, mirroring ontology/service.py's schema-change trigger).
+    calls = _stub_reindex(monkeypatch)
+    domain = _make_domain(db_session)
+
+    service.update_ingestion_config(
+        db_session, domain.id, models.DomainIngestionConfigUpdate(paragraphs_per_chunk=3, paragraph_overlap=1), uuid4()
+    )
+
+    assert calls == [domain.id]
+
+
+def test_update_ingestion_config_rejects_overlap_not_smaller_than_group_size(db_session, monkeypatch):
+    _stub_reindex(monkeypatch)
     domain = _make_domain(db_session)
 
     with pytest.raises(InvalidIngestionConfigError):
