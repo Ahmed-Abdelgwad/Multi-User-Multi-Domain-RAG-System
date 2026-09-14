@@ -2,7 +2,7 @@ from uuid import uuid4
 from src.tasks.celery_app import celery_app
 from src.tasks.pipeline import (
     ping, extract_text_task, chunk_and_embed_task, reextract_domain_task, batch_extract_entities_task,
-    reindex_domain_chunks_task,
+    reindex_domain_chunks_task, evaluate_query_log_task,
 )
 
 
@@ -223,3 +223,69 @@ def test_batch_extract_entities_task_processes_only_unextracted_documents(db_ses
     batch_extract_entities_task()
 
     assert processed == [pending_document_id]
+
+
+def test_evaluate_query_log_task_creates_pending_row_before_delegating(db_session, monkeypatch):
+    """Spec 4.1/4.3: the task's own responsibility is just to guarantee an
+    EvaluationResult row exists at PENDING before the real judge call
+    (evaluation/service.py::evaluate_query_log) runs -- so a client
+    polling mid-evaluation always finds a real row, never "not found."
+    """
+    import src.database.core as database_core
+    from src.entities.query_log import QueryLog
+    from src.entities.evaluation_result import EvaluationResult
+    from src.entities.enums import LLMRoute, EvaluationStatus
+
+    monkeypatch.setattr(database_core, "SessionLocal", lambda: db_session)
+
+    query_log = QueryLog(
+        id=uuid4(), user_id=uuid4(), domain_ids=[str(uuid4())], query="q", answer="a",
+        route=LLMRoute.API, confidence=0.9, sources=[], graph_context=[],
+    )
+    db_session.add(query_log)
+    db_session.commit()
+
+    status_seen_at_call_time = {}
+    import src.evaluation.service as evaluation_service
+
+    def _fake_evaluate_query_log(db, query_log_id):
+        row = db.query(EvaluationResult).filter(EvaluationResult.query_log_id == query_log_id).first()
+        status_seen_at_call_time["status"] = row.status
+        row.status = EvaluationStatus.COMPLETED
+        db.commit()
+        return row
+
+    monkeypatch.setattr(evaluation_service, "evaluate_query_log", _fake_evaluate_query_log)
+
+    query_log_id = query_log.id  # captured before the task's commit/close expires+detaches it
+    evaluate_query_log_task(str(query_log_id))
+
+    assert status_seen_at_call_time["status"] == EvaluationStatus.PENDING
+    row = db_session.query(EvaluationResult).filter(EvaluationResult.query_log_id == query_log_id).first()
+    assert row.status == EvaluationStatus.COMPLETED
+
+
+def test_evaluate_query_log_task_does_not_duplicate_row_on_retry(db_session, monkeypatch):
+    import src.database.core as database_core
+    from src.entities.query_log import QueryLog
+    from src.entities.evaluation_result import EvaluationResult
+    from src.entities.enums import LLMRoute
+
+    monkeypatch.setattr(database_core, "SessionLocal", lambda: db_session)
+
+    query_log = QueryLog(
+        id=uuid4(), user_id=uuid4(), domain_ids=[str(uuid4())], query="q", answer="a",
+        route=LLMRoute.API, confidence=0.9, sources=[], graph_context=[],
+    )
+    db_session.add(query_log)
+    db_session.add(EvaluationResult(id=uuid4(), query_log_id=query_log.id))
+    db_session.commit()
+
+    import src.evaluation.service as evaluation_service
+    monkeypatch.setattr(evaluation_service, "evaluate_query_log", lambda db, query_log_id: None)
+
+    query_log_id = query_log.id  # captured before the task's commit/close expires+detaches it
+    evaluate_query_log_task(str(query_log_id))
+
+    rows = db_session.query(EvaluationResult).filter(EvaluationResult.query_log_id == query_log_id).all()
+    assert len(rows) == 1

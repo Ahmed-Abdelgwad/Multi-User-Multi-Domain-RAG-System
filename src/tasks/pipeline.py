@@ -26,6 +26,12 @@ idempotent/re-runnable (retires the previous generation, keeps history --
 see chunking/service.py), so this task just fans back out to the same
 task per `ready` document in the domain instead of introducing a second
 sweep mechanism.
+
+`evaluate_query_log_task` (spec section 4, phase 3) is the first task in
+this module dispatched from a live user-facing request rather than an
+ingestion/config-change side effect: retrieval/service.py::answer_query
+fires it immediately after committing a QueryLog row, so the Judge LLM
+call never adds to /query's own response latency.
 """
 from uuid import UUID
 from .celery_app import celery_app
@@ -164,6 +170,35 @@ def backfill_neo4j_graph_task() -> None:
             ]
             for chunk_id in chunk_ids:
                 graph_store.upsert_edge_to_graph(edge, chunk_id)
+    finally:
+        db.close()
+
+
+@celery_app.task(name="pipeline.evaluate_query_log", bind=True, max_retries=2, default_retry_delay=10)
+def evaluate_query_log_task(self, query_log_id: str) -> None:
+    """Spec 4.1's async judge call, fired by retrieval/service.py::answer_query
+    right after a QueryLog row is committed -- 4.1's "does not gate the
+    user-facing response," the exact same "commit first, .delay() after"
+    ordering already used by reindex_domain_chunks_task/reextract_domain_task.
+    First creates the EvaluationResult row at PENDING (single commit) if
+    one doesn't already exist -- so a retry re-enters an already-PENDING
+    row instead of creating a duplicate -- then hands off to
+    evaluation/service.py::evaluate_query_log, which does the actual
+    judge call and always leaves the row at a terminal status.
+    """
+    from src.database.core import SessionLocal
+    from src.entities.evaluation_result import EvaluationResult
+    from src.evaluation.service import evaluate_query_log
+    from uuid import uuid4
+
+    db = SessionLocal()
+    try:
+        existing = db.query(EvaluationResult).filter(EvaluationResult.query_log_id == UUID(query_log_id)).first()
+        if existing is None:
+            db.add(EvaluationResult(id=uuid4(), query_log_id=UUID(query_log_id)))
+            db.commit()
+
+        evaluate_query_log(db, UUID(query_log_id))
     finally:
         db.close()
 

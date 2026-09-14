@@ -55,3 +55,28 @@ class LLMRoute(str, enum.Enum):
     """
     LOCAL = "local"
     API = "api"
+
+
+class JudgeProvider(str, enum.Enum):
+    """Spec 4.1's judge backend -- a distinct concept from LLMRoute
+    (LLMRoute answers "which model generated this answer"; this answers
+    "which model judged it"), named by the actual provider rather than
+    an abstract local/api tier so a third backend later doesn't force a
+    tier-naming stretch. MERCURY (Inception Labs API) is the default for
+    all traffic in this MVP; OLLAMA (self-hosted) is implemented but not
+    wired into the default flow yet -- see evaluation/judge.py.
+    """
+    MERCURY = "mercury"
+    OLLAMA = "ollama"
+
+
+class EvaluationStatus(str, enum.Enum):
+    """Spec 4.1/4.3's async judge evaluation lifecycle. Every
+    `EvaluationResult` row lands in an explicit terminal state
+    (COMPLETED/FAILED/SKIPPED) once the judge task actually runs --
+    never left ambiguously at PENDING forever.
+    """
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"

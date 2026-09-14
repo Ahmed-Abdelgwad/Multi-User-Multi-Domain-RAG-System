@@ -2,6 +2,7 @@ from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, Field
 from src.entities.enums import LLMRoute
+from src.evaluation.models import EvaluationSummary
 
 
 class DomainRetrievalConfigResponse(BaseModel):
@@ -53,3 +54,10 @@ class QueryResponse(BaseModel):
     low_confidence: bool
     entities: list[tuple[str, str]]
     sources: list[QuerySource]
+    query_log_id: UUID
+    # Spec 4.3: "Evaluation scores included in the /query response
+    # envelope (async -- may be null if evaluation not yet complete)".
+    # Always null at response time by construction -- the judge task is
+    # only just dispatched (see retrieval/service.py::answer_query); the
+    # real value is only ever populated via GET /query/{id}/evaluation.
+    evaluation: EvaluationSummary | None = None

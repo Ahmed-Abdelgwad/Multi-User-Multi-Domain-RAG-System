@@ -53,4 +53,5 @@ def query(db: DbSession, request: models.QueryRequest, current_user: CurrentUser
         low_confidence=result["low_confidence"],
         entities=result["entities"],
         sources=sources,
+        query_log_id=result["query_log_id"],
     )

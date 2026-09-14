@@ -93,6 +93,19 @@ class GenerationUnavailableError(RetrievalError):
     def __init__(self, message: str = "Generation model is unavailable"):
         super().__init__(status_code=502, detail=message)
 
+class EvaluationError(HTTPException):
+    """Base exception for judge evaluation errors (spec section 4)"""
+    pass
+
+class JudgeUnavailableError(EvaluationError):
+    def __init__(self, message: str = "Judge model is unavailable"):
+        super().__init__(status_code=502, detail=message)
+
+class QueryLogNotFoundError(EvaluationError):
+    def __init__(self, query_log_id=None):
+        message = "Query log not found" if query_log_id is None else f"Query log with id {query_log_id} not found"
+        super().__init__(status_code=404, detail=message)
+
 class OntologyError(HTTPException):
     """Base exception for graph ontology schema errors"""
     pass

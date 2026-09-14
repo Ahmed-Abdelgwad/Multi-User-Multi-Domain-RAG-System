@@ -22,9 +22,13 @@ from .chunk_graph_node_link import ChunkGraphNodeLink
 from .chunk_graph_edge_link import ChunkGraphEdgeLink
 from .domain_retrieval_config import DomainRetrievalConfig
 from .session_policy import SessionPolicy
+from .golden_qa_item import GoldenQAItem
+from .query_log import QueryLog
+from .evaluation_result import EvaluationResult
+from .domain_evaluation_config import DomainEvaluationConfig
 
 __all__ = [
     "User", "Domain", "UserDomainRole", "Document", "Chunk", "DomainIngestionConfig", "OntologySchema",
     "GraphNode", "GraphEdge", "ChunkGraphNodeLink", "ChunkGraphEdgeLink", "DomainRetrievalConfig",
-    "SessionPolicy",
+    "SessionPolicy", "GoldenQAItem", "QueryLog", "EvaluationResult", "DomainEvaluationConfig",
 ]

@@ -90,6 +90,7 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
     ensemble = EnsembleRetriever(retrievers=retrievers, weights=weights, id_key="chunk_id")
     documents = ensemble.weighted_reciprocal_rank(doc_lists)[:RETRIEVAL_TOP_K]
 
+    graph_context: list[str] = []
     if entities:
         graph_docs = next(
             docs for r, docs in zip(retrievers, doc_lists) if isinstance(r, Neo4jGraphChunkRetriever)
@@ -98,6 +99,12 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
         for d in documents:
             if d.metadata["chunk_id"] in graph_scores:
                 d.metadata.setdefault("graph_score", graph_scores[d.metadata["chunk_id"]])
+        # Spec 4.1's judge input is "chunks + graph nodes" -- flatten the
+        # matched Subject-Predicate-Object triples across every graph
+        # result into one list, deduped, for the judge prompt to see
+        # alongside the numbered chunk context (see graph_retriever.py's
+        # graph_triples metadata for where these come from).
+        graph_context = sorted({triple for d in graph_docs for triple in d.metadata.get("graph_triples", [])})
 
     confidence = router.compute_confidence(documents, graph_activated=bool(entities))
     return {
@@ -105,6 +112,7 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
         "permitted_domain_ids": permitted,
         "entities": entities,
         "documents": documents,
+        "graph_context": graph_context,
         "confidence": confidence,
         "low_confidence": confidence < config.confidence_threshold,
         "config": config,
@@ -113,12 +121,27 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
 
 def answer_query(db: Session, current_user: TokenData, query: str, requested_domain_ids: list[UUID]) -> dict:
     """3.5's orchestration: retrieve() covers 3.1-3.4/3.6, this adds
-    generation on top and returns the full /query payload.
+    generation on top and returns the full /query payload. Spec 4.1's
+    judge is dispatched here too, right after the QueryLog commit --
+    fire-and-forget, so it never adds to this response's latency.
     """
     from src.generation.service import generate_answer
+    from src.evaluation.service import create_query_log
 
     result = retrieve(db, current_user, query, requested_domain_ids)
     answer, route = generate_answer(query, result["documents"], result["config"])
     result["answer"] = answer
     result["route"] = route
+
+    query_log = create_query_log(db, current_user, query, result)
+    result["query_log_id"] = query_log.id
+    _enqueue_evaluation(query_log.id)
+
     return result
+
+
+def _enqueue_evaluation(query_log_id: UUID) -> None:
+    # Imported lazily to avoid a retrieval<->tasks import cycle, same
+    # rationale as chunking/service.py's _enqueue_reindex.
+    from src.tasks.pipeline import evaluate_query_log_task
+    evaluate_query_log_task.delay(str(query_log_id))

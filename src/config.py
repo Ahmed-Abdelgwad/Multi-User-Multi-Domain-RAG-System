@@ -1,5 +1,12 @@
 from functools import lru_cache
+from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Plain Literal here, not entities.enums.JudgeProvider -- importing the
+# entities package from config.py would be circular (database/core.py,
+# imported transitively by every entity module, itself imports
+# get_settings from this file). Settings.judge_provider's value is cast
+# to JudgeProvider at the one call site that needs it (evaluation/judge.py).
 
 
 class Settings(BaseSettings):
@@ -52,6 +59,22 @@ class Settings(BaseSettings):
     local_llm_enabled: bool = False
     local_llm_model_name: str = "qwen3:4b"
     ollama_base_url: str = "http://ollama:11434"
+
+    # Section 4: Judge LLM Evaluation Layer. Mercury 2.5 (Inception Labs)
+    # is the default judge for ALL traffic today -- a deliberate MVP
+    # choice, not routed by generation's LLMRoute yet (see
+    # evaluation/judge.py's module docstring for the data-residency
+    # caveat this implies). judge_provider is "mercury"/"ollama" (cast to
+    # entities.enums.JudgeProvider at the call site), default "mercury"
+    # -- flipping this one value is the whole migration path to an
+    # all-local (Ollama) judge later.
+    inception_api_key: str | None = None
+    judge_api_model_name: str = "mercury-2.5"
+    judge_api_reasoning_effort: str = "low"
+    judge_provider: Literal["mercury", "ollama"] = "mercury"
+    judge_llm_enabled: bool = False
+    judge_llm_model_name: str = "qwen3:4b"
+    golden_regression_cron_hour: int = 2
 
 
 @lru_cache
