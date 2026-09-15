@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
+    # Frontend SPA origin(s) allowed to call this API cross-origin (Vite's
+    # dev server by default; add the deployed frontend's origin in prod).
+    cors_allowed_origins: list[str] = ["http://localhost:5173"]
+
     database_url: str = "postgresql://postgres:postgres@db:5432/cleanfastapi"
 
     oidc_internal_discovery_url: str | None = None

@@ -9,6 +9,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     first_name: str
     last_name: str
+    is_platform_admin: bool
 
 
 class PasswordChange(BaseModel):

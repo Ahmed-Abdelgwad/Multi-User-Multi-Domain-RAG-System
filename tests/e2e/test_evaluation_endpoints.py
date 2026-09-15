@@ -139,6 +139,26 @@ def test_contributor_cannot_read_moderation_queue(client: TestClient, platform_a
     assert response.status_code == 403
 
 
+def test_moderation_queue_item_includes_the_underlying_query_and_answer(client: TestClient, platform_admin_headers, db_session):
+    # A moderation UI needs to show an admin what was actually asked/
+    # answered, not just its scores -- confirms the enriched response
+    # model (ModerationQueueItemResponse) actually reaches the client.
+    domain_id = _create_domain(client, platform_admin_headers, name="modq-domain-enriched").json()["id"]
+    query_log = _insert_query_log(db_session, domain_id, uuid4())
+    evaluation = _insert_completed_evaluation(db_session, query_log.id)
+    evaluation.flagged = True
+    db_session.commit()
+
+    response = client.get(f"/domains/{domain_id}/moderation-queue/", headers=platform_admin_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["query"] == query_log.query
+    assert body[0]["answer"] == query_log.answer
+    assert "query_created_at" in body[0]
+
+
 # --- POST /domains/{id}/moderation-queue/{query_log_id}/override (4.6) --
 # RBAC + status/field shape; the snapshot/no-clobber correctness itself is
 # covered by test_evaluation_service.py's sqlite-runnable unit tests.

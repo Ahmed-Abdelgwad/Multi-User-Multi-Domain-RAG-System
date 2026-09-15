@@ -223,16 +223,23 @@ def get_evaluation(db: Session, current_user: TokenData, query_log_id: UUID) -> 
     return db.query(EvaluationResult).filter(EvaluationResult.query_log_id == query_log_id).first()
 
 
-def get_moderation_queue(db: Session, domain_id: UUID) -> list[EvaluationResult]:
-    
+def get_moderation_queue(db: Session, domain_id: UUID) -> list[models.ModerationQueueItemResponse]:
+
     domain_id_str = str(domain_id)
     rows = (
-        db.query(EvaluationResult, QueryLog.domain_ids)
+        db.query(EvaluationResult, QueryLog)
         .join(QueryLog, EvaluationResult.query_log_id == QueryLog.id)
         .filter(EvaluationResult.flagged.is_(True), EvaluationResult.overridden_by.is_(None))
         .all()
     )
-    return [result for result, domain_ids in rows if domain_id_str in domain_ids]
+    return [
+        models.ModerationQueueItemResponse(
+            **models.EvaluationDetailResponse.model_validate(result, from_attributes=True).model_dump(),
+            query=query_log.query, answer=query_log.answer, query_created_at=query_log.created_at,
+        )
+        for result, query_log in rows
+        if domain_id_str in query_log.domain_ids
+    ]
 
 
 def _authorize_and_load_evaluation_for_review(

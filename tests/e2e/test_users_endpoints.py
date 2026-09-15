@@ -7,6 +7,7 @@ def test_get_current_user(client: TestClient, auth_headers):
     assert "email" in user_data
     assert "first_name" in user_data
     assert "last_name" in user_data
+    assert "is_platform_admin" in user_data
     assert "password_hash" not in user_data
 
 def test_change_password(client: TestClient, auth_headers):

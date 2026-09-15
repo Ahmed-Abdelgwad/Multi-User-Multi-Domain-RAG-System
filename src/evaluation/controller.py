@@ -64,7 +64,7 @@ def get_query_evaluation(db: DbSession, query_log_id: UUID, current_user: Curren
     return evaluation
 
 
-@moderation_queue_router.get("/", response_model=List[models.EvaluationDetailResponse])
+@moderation_queue_router.get("/", response_model=List[models.ModerationQueueItemResponse])
 def get_moderation_queue(db: DbSession, domain_id: UUID, _role: DomainRole = Depends(RequireDomainAdmin)):
     return service.get_moderation_queue(db, domain_id)
 

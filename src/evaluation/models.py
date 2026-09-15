@@ -49,6 +49,16 @@ class EvaluationDetailResponse(BaseModel):
     human_verdict: HumanVerdict | None = None
 
 
+class ModerationQueueItemResponse(EvaluationDetailResponse):
+    """The moderation queue needs to show an admin what was actually
+    asked/answered, not just its scores -- EvaluationDetailResponse alone
+    has no query/answer text (by design: the polling endpoint's caller
+    already has that from its own /query/ call)."""
+    query: str
+    answer: str
+    query_created_at: datetime
+
+
 class EvaluationOverrideRequest(BaseModel):
     faithfulness: float = Field(ge=0.0, le=1.0)
     relevance: float = Field(ge=0.0, le=1.0)
