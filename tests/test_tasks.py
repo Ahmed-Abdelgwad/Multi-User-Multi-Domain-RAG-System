@@ -2,7 +2,8 @@ from uuid import uuid4
 from src.tasks.celery_app import celery_app
 from src.tasks.pipeline import (
     ping, extract_text_task, chunk_and_embed_task, reextract_domain_task, batch_extract_entities_task,
-    reindex_domain_chunks_task, evaluate_query_log_task,
+    reindex_domain_chunks_task, evaluate_query_log_task, run_golden_regression_for_domain_task,
+    run_golden_regression_task,
 )
 
 
@@ -289,3 +290,57 @@ def test_evaluate_query_log_task_does_not_duplicate_row_on_retry(db_session, mon
 
     rows = db_session.query(EvaluationResult).filter(EvaluationResult.query_log_id == query_log_id).all()
     assert len(rows) == 1
+
+
+def test_run_golden_regression_for_domain_task_delegates_to_service(db_session, monkeypatch):
+    """Spec 4.5: the per-domain task's own job is just opening its own DB
+    session and handing off to evaluation/service.py::run_golden_regression_for_domain
+    -- the real retrieval/generation/judge orchestration lives there, not
+    duplicated here.
+    """
+    import src.database.core as database_core
+    from src.entities.domain import Domain
+
+    monkeypatch.setattr(database_core, "SessionLocal", lambda: db_session)
+    domain = Domain(id=uuid4(), name=f"domain-{uuid4()}", created_by=uuid4())
+    db_session.add(domain)
+    db_session.commit()
+    domain_id = domain.id  # captured before the task's commit/close expires+detaches it
+
+    called_with = []
+    import src.evaluation.service as evaluation_service
+    monkeypatch.setattr(
+        evaluation_service, "run_golden_regression_for_domain", lambda db, d_id: called_with.append(d_id) or []
+    )
+
+    run_golden_regression_for_domain_task(str(domain_id))
+
+    assert called_with == [domain_id]
+
+
+def test_run_golden_regression_task_fans_out_only_to_domains_with_golden_items(db_session, monkeypatch):
+    """Spec 4.5's nightly sweep: only domains that actually have at least
+    one GoldenQAItem get a regression run fanned out for them.
+    """
+    import src.database.core as database_core
+    from src.entities.domain import Domain
+    from src.entities.golden_qa_item import GoldenQAItem
+
+    monkeypatch.setattr(database_core, "SessionLocal", lambda: db_session)
+    domain_with_items = Domain(id=uuid4(), name=f"domain-{uuid4()}", created_by=uuid4())
+    domain_without_items = Domain(id=uuid4(), name=f"domain-{uuid4()}", created_by=uuid4())
+    db_session.add_all([domain_with_items, domain_without_items])
+    db_session.add(GoldenQAItem(
+        id=uuid4(), domain_id=domain_with_items.id, question="q", expected_answer="a", created_by=uuid4(),
+    ))
+    db_session.commit()
+    domain_with_items_id = domain_with_items.id  # captured before the task's commit/close expires+detaches it
+
+    fanned_out = []
+    monkeypatch.setattr(
+        run_golden_regression_for_domain_task, "delay", lambda domain_id: fanned_out.append(domain_id)
+    )
+
+    run_golden_regression_task()
+
+    assert fanned_out == [str(domain_with_items_id)]

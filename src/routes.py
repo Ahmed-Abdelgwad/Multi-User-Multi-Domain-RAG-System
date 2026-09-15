@@ -7,7 +7,10 @@ from src.chunking.controller import ingestion_config_router, chunks_router
 from src.ontology.controller import router as ontology_router
 from src.extraction.controller import router as graph_router
 from src.retrieval.controller import retrieval_config_router, query_router
-from src.evaluation.controller import evaluation_config_router, query_evaluation_router, moderation_queue_router
+from src.evaluation.controller import (
+    evaluation_config_router, query_evaluation_router, moderation_queue_router, quality_dashboard_router,
+    golden_qa_router,
+)
 
 def register_routes(app: FastAPI):
     app.include_router(auth_router)
@@ -23,3 +26,5 @@ def register_routes(app: FastAPI):
     app.include_router(evaluation_config_router)
     app.include_router(query_evaluation_router)
     app.include_router(moderation_queue_router)
+    app.include_router(quality_dashboard_router)
+    app.include_router(golden_qa_router)

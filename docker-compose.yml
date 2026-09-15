@@ -90,11 +90,15 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=neo4jpassword
       # Spec 4.1's judge runs here too (Phase 3's pipeline.evaluate_query_log
-      # task, celery_worker, not the api process -- generation's own
-      # OPENROUTER_API_KEY never needed this since generation only ever
-      # ran synchronously inside `api`).
+      # task, celery_worker, not the api process).
       - INCEPTION_API_KEY=${INCEPTION_API_KEY:-}
       - OLLAMA_BASE_URL=http://ollama:11434
+      # Spec 4.5's golden regression (pipeline.run_golden_regression_for_domain)
+      # calls generate_answer() from inside celery_worker -- the first task
+      # to do so; generation previously only ever ran synchronously inside
+      # `api`, which is why this wasn't needed here before.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL_NAME=ibm-granite/granite-4.2-8b
     depends_on:
       - db
       - redis

@@ -53,19 +53,18 @@ def update_retrieval_config(
 
 
 def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_ids: list[UUID]) -> dict:
-    """Spec 3.1-3.4/3.6's retrieval half: RBAC-scope the domains
-    (Paper 1 -- server-side, never trust the request), query-time NER
-    (3.3), route + weight the dense/BM25/graph signals per domain
-    (3.4), RRF-fuse them via EnsembleRetriever, score confidence (3.6).
-    Generation (3.5) and the /query envelope are layered on in Phase 5.
-    """
+    
+    retrieval_filter = build_retrieval_filter(db, current_user, requested_domain_ids)
+    return _retrieve_for_permitted_domains(db, query, retrieval_filter.permitted_domain_ids)
+
+
+def _retrieve_for_permitted_domains(db: Session, query: str, permitted: list[UUID]) -> dict:
+    
     from langchain_classic.retrievers.ensemble import EnsembleRetriever
     from .ner import analyze_query
     from .graph_retriever import Neo4jGraphChunkRetriever
     from . import router
 
-    retrieval_filter = build_retrieval_filter(db, current_user, requested_domain_ids)
-    permitted = retrieval_filter.permitted_domain_ids
     # Multi-domain query: use the first permitted domain's tuning knobs
     # (per-query cross-domain weight merging is out of scope for MVP).
     config = get_or_create_retrieval_config(db, permitted[0])
@@ -75,17 +74,7 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
         db, entities, entity_token_ratio, permitted, config, k=RETRIEVAL_TOP_K
     )
 
-    # Invoke each retriever ourselves (once) and hand the results straight
-    # to EnsembleRetriever's own weighted_reciprocal_rank -- same genuine
-    # RRF fusion as calling ensemble.invoke(query) would do, but without
-    # letting it re-invoke every retriever internally. That matters here
-    # because its dedup-by-chunk_id keeps only the first retriever's
-    # Document per chunk (vector, listed first), silently dropping
-    # graph_score for a chunk vector also matched; previously that was
-    # patched by invoking Neo4jGraphChunkRetriever a *second* time just to
-    # recover it. Keeping our one set of per-retriever results around
-    # instead means the backfill below is free -- no second Cypher round
-    # trip per entity-bearing query.
+    
     doc_lists = [r.invoke(query) for r in retrievers]
     ensemble = EnsembleRetriever(retrievers=retrievers, weights=weights, id_key="chunk_id")
     documents = ensemble.weighted_reciprocal_rank(doc_lists)[:RETRIEVAL_TOP_K]
@@ -99,11 +88,7 @@ def retrieve(db: Session, current_user: TokenData, query: str, requested_domain_
         for d in documents:
             if d.metadata["chunk_id"] in graph_scores:
                 d.metadata.setdefault("graph_score", graph_scores[d.metadata["chunk_id"]])
-        # Spec 4.1's judge input is "chunks + graph nodes" -- flatten the
-        # matched Subject-Predicate-Object triples across every graph
-        # result into one list, deduped, for the judge prompt to see
-        # alongside the numbered chunk context (see graph_retriever.py's
-        # graph_triples metadata for where these come from).
+        
         graph_context = sorted({triple for d in graph_docs for triple in d.metadata.get("graph_triples", [])})
 
     confidence = router.compute_confidence(documents, graph_activated=bool(entities))

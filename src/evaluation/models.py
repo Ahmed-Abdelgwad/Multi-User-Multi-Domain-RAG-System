@@ -1,7 +1,7 @@
 from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, Field
-from src.entities.enums import EvaluationStatus, JudgeProvider
+from src.entities.enums import EvaluationStatus, JudgeProvider, HumanVerdict
 
 
 class DomainEvaluationConfigResponse(BaseModel):
@@ -45,6 +45,8 @@ class EvaluationDetailResponse(BaseModel):
     overridden_by: UUID | None
     override_rationale: str | None
     overridden_at: datetime | None
+    original_scores: dict[str, float | None] | None = None
+    human_verdict: HumanVerdict | None = None
 
 
 class EvaluationOverrideRequest(BaseModel):
@@ -52,7 +54,16 @@ class EvaluationOverrideRequest(BaseModel):
     relevance: float = Field(ge=0.0, le=1.0)
     completeness: float = Field(ge=0.0, le=1.0)
     citation_accuracy: float = Field(ge=0.0, le=1.0)
-    rationale: str
+    rationale: str = Field(min_length=1)
+
+
+class EvaluationVerdictRequest(BaseModel):
+    """4.6's "accept or reject flagged answers" -- independent of
+    EvaluationOverrideRequest's numeric score correction; an admin can
+    render one, the other, or both on the same evaluation.
+    """
+    verdict: HumanVerdict
+    rationale: str = Field(min_length=1)
 
 
 class GoldenQAItemResponse(BaseModel):
@@ -77,9 +88,36 @@ class QualityDashboardDimension(BaseModel):
     sample_count: int
 
 
+class QualityDashboardTrendPoint(BaseModel):
+    """One bucket of spec 4.4's "trended over time" -- `window_days` wide,
+    most-recent bucket last. `by_dimension[0]`/`[-1]` line up with the
+    top-level `by_dimension`/degradation-comparison fields below (the
+    same two most-recent buckets), so a client charting `trend` doesn't
+    need to reconcile two different aggregation windows.
+    """
+    period_start: datetime
+    period_end: datetime
+    by_dimension: dict[str, QualityDashboardDimension]
+
+
+class GoldenRegressionSummary(BaseModel):
+    """Spec 4.5's "results surfaced in the quality dashboard" -- the
+    golden set's CURRENT state (each item's most recent regression
+    answer, regardless of which nightly run produced it), kept
+    separate from live-traffic numbers above so one doesn't skew the
+    other.
+    """
+    item_count: int
+    flagged_count: int
+    last_run_at: datetime | None
+    by_dimension: dict[str, QualityDashboardDimension]
+
+
 class QualityDashboardResponse(BaseModel):
     domain_id: UUID
     window_days: int
     by_dimension: dict[str, QualityDashboardDimension]
     by_route: dict[str, dict[str, QualityDashboardDimension]]
     degrading_dimensions: list[str]
+    trend: list[QualityDashboardTrendPoint]
+    golden_regression: GoldenRegressionSummary

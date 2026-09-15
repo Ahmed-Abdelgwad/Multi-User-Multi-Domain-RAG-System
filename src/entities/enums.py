@@ -80,3 +80,15 @@ class EvaluationStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class HumanVerdict(str, enum.Enum):
+    """Spec 4.6's "accept or reject flagged answers" -- a moderation
+    verdict on the ANSWER's overall usability, orthogonal to (and
+    combinable with) a numeric score correction via override_evaluation.
+    An admin might reject an answer for reasons the four judge
+    dimensions don't fully capture, or accept one as-is to confirm the
+    judge scored it correctly.
+    """
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"

@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime, timezone
 from ..database.core import Base
-from .enums import EvaluationStatus, JudgeProvider
+from .enums import EvaluationStatus, JudgeProvider, HumanVerdict
 
 
 class EvaluationResult(Base):
@@ -43,6 +43,10 @@ class EvaluationResult(Base):
     override_rationale = Column(Text, nullable=True)
     overridden_at = Column(DateTime, nullable=True)
     original_scores = Column(JSON, nullable=True)
+    # "Accept or reject flagged answers" -- a moderation verdict on the
+    # answer's overall usability, independent of (and combinable with) a
+    # numeric score correction above.
+    human_verdict = Column(Enum(HumanVerdict), nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

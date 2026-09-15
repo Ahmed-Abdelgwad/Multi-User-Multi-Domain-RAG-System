@@ -203,6 +203,46 @@ def evaluate_query_log_task(self, query_log_id: str) -> None:
         db.close()
 
 
+@celery_app.task(name="pipeline.run_golden_regression_for_domain", bind=True, max_retries=2, default_retry_delay=10)
+def run_golden_regression_for_domain_task(self, domain_id: str) -> None:
+    """Runs spec 4.5's regression for one domain's golden set -- a real
+    retrieval + generation + reference-aware judge call per curated
+    item. Fanned out to per-domain (rather than looping over every
+    domain in one task) so one domain's failure/slowness is isolated
+    from the rest, same fan-out shape as `reindex_domain_chunks_task`.
+    Triggered either by the nightly `run_golden_regression_task` sweep
+    below, or manually via `POST /domains/{id}/golden-qa/run-regression`.
+    """
+    from src.database.core import SessionLocal
+    from src.evaluation.service import run_golden_regression_for_domain
+
+    db = SessionLocal()
+    try:
+        run_golden_regression_for_domain(db, UUID(domain_id))
+    finally:
+        db.close()
+
+
+@celery_app.task(name="pipeline.run_golden_regression")
+def run_golden_regression_task() -> None:
+    """Spec 4.5's nightly sweep (Celery Beat, see celery_app.py's
+    `beat_schedule` -- a real cron schedule, not a fixed interval):
+    finds every domain with at least one `GoldenQAItem` and fans out to
+    `run_golden_regression_for_domain_task` per domain.
+    """
+    from src.database.core import SessionLocal
+    from src.entities.golden_qa_item import GoldenQAItem
+
+    db = SessionLocal()
+    try:
+        domain_ids = [row[0] for row in db.query(GoldenQAItem.domain_id).distinct().all()]
+    finally:
+        db.close()
+
+    for domain_id in domain_ids:
+        run_golden_regression_for_domain_task.delay(str(domain_id))
+
+
 @celery_app.task(name="pipeline.batch_extract_entities")
 def batch_extract_entities_task() -> None:
     """Spec 2.5's "background batch job post-ingest" trigger, run on a

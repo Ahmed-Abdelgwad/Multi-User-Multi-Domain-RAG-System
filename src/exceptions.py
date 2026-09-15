@@ -106,6 +106,15 @@ class QueryLogNotFoundError(EvaluationError):
         message = "Query log not found" if query_log_id is None else f"Query log with id {query_log_id} not found"
         super().__init__(status_code=404, detail=message)
 
+class InvalidDashboardWindowError(EvaluationError):
+    def __init__(self, message: str):
+        super().__init__(status_code=400, detail=message)
+
+class GoldenQAItemNotFoundError(EvaluationError):
+    def __init__(self, item_id=None):
+        message = "Golden QA item not found" if item_id is None else f"Golden QA item with id {item_id} not found"
+        super().__init__(status_code=404, detail=message)
+
 class OntologyError(HTTPException):
     """Base exception for graph ontology schema errors"""
     pass
