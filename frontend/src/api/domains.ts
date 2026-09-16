@@ -1,5 +1,5 @@
 import { apiDelete, apiGet, apiPost } from './client'
-import type { DomainResponse, DomainRole, UserDomainRoleResponse } from './types'
+import type { DomainResponse, DomainRole, UserDomainRoleResponse, UserResponse } from './types'
 
 export interface DomainCreateInput {
   name: string
@@ -37,4 +37,8 @@ export function assignRole(domainId: string, input: AssignRoleInput): Promise<Us
 
 export function revokeRole(domainId: string, userId: string): Promise<void> {
   return apiDelete<void>(`/domains/${domainId}/roles/${userId}`)
+}
+
+export function lookupUsersToInvite(domainId: string, email: string): Promise<UserResponse[]> {
+  return apiGet<UserResponse[]>(`/domains/${domainId}/roles/lookup?email=${encodeURIComponent(email)}`)
 }

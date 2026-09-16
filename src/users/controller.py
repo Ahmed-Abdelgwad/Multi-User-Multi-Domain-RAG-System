@@ -1,7 +1,10 @@
 from typing import List
-from fastapi import APIRouter, status
+from uuid import UUID
+from fastapi import APIRouter, Depends, Query, status
 
 from ..database.core import DbSession
+from ..entities.user import User
+from ..authz.dependencies import require_platform_admin
 from . import models
 from . import service
 from ..auth.service import CurrentUser
@@ -20,6 +23,26 @@ def get_current_user(current_user: CurrentUser, db: DbSession):
 @router.get("/me/domains", response_model=List[models.UserDomainMembership])
 def get_current_user_domains(current_user: CurrentUser, db: DbSession):
     return service.get_user_domains(db, current_user.get_uuid())
+
+
+@router.get("/", response_model=List[models.UserResponse])
+def list_users(
+    db: DbSession,
+    _admin: User = Depends(require_platform_admin),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    return service.list_all_users(db, limit, offset)
+
+
+@router.put("/{user_id}/platform-admin", response_model=models.UserResponse)
+def set_platform_admin(
+    db: DbSession,
+    user_id: UUID,
+    update: models.PlatformAdminUpdate,
+    admin: User = Depends(require_platform_admin),
+):
+    return service.set_platform_admin(db, user_id, update.is_platform_admin, admin.id)
 
 
 @router.put("/change-password", status_code=status.HTTP_200_OK)

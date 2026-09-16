@@ -81,6 +81,47 @@ def test_get_current_user_domains_lists_memberships(client: TestClient, platform
     assert memberships[0]["role"] == "domain_admin"
 
 
+def test_list_users_requires_platform_admin(client: TestClient, auth_headers, platform_admin_headers):
+    response = client.get("/users/", headers=auth_headers)
+    assert response.status_code == 403
+
+    response = client.get("/users/", headers=platform_admin_headers)
+    assert response.status_code == 200
+    assert any(u["email"].startswith("admin-") for u in response.json())
+
+
+def _current_user_id(client: TestClient, headers) -> str:
+    return client.get("/users/me", headers=headers).json()["id"]
+
+
+def test_set_platform_admin_requires_platform_admin(client: TestClient, auth_headers, platform_admin_headers):
+    target_id = _current_user_id(client, auth_headers)
+
+    response = client.put(f"/users/{target_id}/platform-admin", headers=auth_headers, json={"is_platform_admin": True})
+
+    assert response.status_code == 403
+
+
+def test_platform_admin_can_grant_and_revoke_admin(client: TestClient, auth_headers, platform_admin_headers):
+    target_id = _current_user_id(client, auth_headers)
+
+    response = client.put(f"/users/{target_id}/platform-admin", headers=platform_admin_headers, json={"is_platform_admin": True})
+    assert response.status_code == 200
+    assert response.json()["is_platform_admin"] is True
+
+    response = client.put(f"/users/{target_id}/platform-admin", headers=platform_admin_headers, json={"is_platform_admin": False})
+    assert response.status_code == 200
+    assert response.json()["is_platform_admin"] is False
+
+
+def test_platform_admin_cannot_modify_own_status(client: TestClient, platform_admin_headers):
+    self_id = _current_user_id(client, platform_admin_headers)
+
+    response = client.put(f"/users/{self_id}/platform-admin", headers=platform_admin_headers, json={"is_platform_admin": False})
+
+    assert response.status_code == 400
+
+
 def test_user_endpoints_authorization(client: TestClient):
     # Try accessing user endpoints without auth
     response = client.get("/users/me")

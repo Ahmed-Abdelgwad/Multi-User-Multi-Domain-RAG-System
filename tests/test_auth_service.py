@@ -54,6 +54,30 @@ async def test_register_user(db_session):
     assert user.email == "new@example.com"
     assert user.first_name == "New"
     assert user.last_name == "User"
+    assert user.is_platform_admin is False
+
+
+@pytest.mark.asyncio
+async def test_register_user_auto_promotes_a_platform_admin_allowlisted_email(db_session, monkeypatch):
+    monkeypatch.setattr(auth_service.settings, "platform_admin_emails", "boss@example.com, other@example.com")
+    request = RegisterUserRequest(email="Boss@Example.com", password="password123", first_name="B", last_name="O")
+
+    auth_service.register_user(db_session, request)
+
+    user = db_session.query(User).filter(User.email.ilike("boss@example.com")).first()
+    assert user is not None
+    assert user.is_platform_admin is True
+
+
+@pytest.mark.asyncio
+async def test_register_user_does_not_promote_an_email_outside_the_allowlist(db_session, monkeypatch):
+    monkeypatch.setattr(auth_service.settings, "platform_admin_emails", "boss@example.com")
+    request = RegisterUserRequest(email="nobody@example.com", password="password123", first_name="N", last_name="O")
+
+    auth_service.register_user(db_session, request)
+
+    user = db_session.query(User).filter_by(email="nobody@example.com").first()
+    assert user.is_platform_admin is False
 
 def test_create_and_verify_token(db_session):
     user_id = uuid4()

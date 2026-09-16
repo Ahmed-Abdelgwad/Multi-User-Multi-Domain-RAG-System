@@ -4,11 +4,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { listDocuments, uploadDocument } from '../api/documents'
 import { getDomain } from '../api/domains'
 import { ApiError } from '../api/client'
+import { useToast } from '../components/ToastProvider'
 import type { DocumentStatus } from '../api/types'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
+import { EmptyState } from '../components/EmptyState'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { Spinner } from '../components/Spinner'
+import { SkeletonTable } from '../components/Skeleton'
 
 const NON_TERMINAL: DocumentStatus[] = ['pending', 'processing', 'indexing']
 
@@ -23,6 +25,7 @@ const STATUS_TONE: Record<DocumentStatus, 'neutral' | 'success' | 'warning' | 'd
 export function DocumentsPage() {
   const { domainId } = useParams<{ domainId: string }>()
   const queryClient = useQueryClient()
+  const { addToast } = useToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
 
@@ -46,9 +49,10 @@ export function DocumentsPage() {
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => uploadDocument(domainId!, file),
-    onSuccess: () => {
+    onSuccess: (doc) => {
       queryClient.invalidateQueries({ queryKey: ['documents', domainId] })
       if (fileInputRef.current) fileInputRef.current.value = ''
+      addToast(`"${doc.filename}" uploaded -- processing`, 'success')
     },
     onError: (err) => setUploadError(err instanceof ApiError ? err.message : 'Could not upload document'),
   })
@@ -60,7 +64,20 @@ export function DocumentsPage() {
     uploadMutation.mutate(file)
   }
 
-  if (documentsQuery.isLoading) return <Spinner />
+  const uploadButton = (
+    <div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        onChange={handleFileChange}
+        style={{ display: 'none' }}
+        accept=".pdf,.docx"
+      />
+      <Button onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
+        {uploadMutation.isPending ? 'Uploading...' : 'Upload document'}
+      </Button>
+    </div>
+  )
 
   return (
     <div>
@@ -69,18 +86,7 @@ export function DocumentsPage() {
       </p>
       <div className="page-header">
         <h1>Documents</h1>
-        <div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-            accept=".pdf,.docx"
-          />
-          <Button onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
-            {uploadMutation.isPending ? 'Uploading...' : 'Upload document'}
-          </Button>
-        </div>
+        {uploadButton}
       </div>
       {uploadError && <ErrorBanner message={uploadError} />}
       {documentsQuery.error && (
@@ -88,36 +94,41 @@ export function DocumentsPage() {
           message={documentsQuery.error instanceof ApiError ? documentsQuery.error.message : 'Could not load documents'}
         />
       )}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Filename</th>
-            <th>Status</th>
-            <th>OCR</th>
-            <th>Uploaded</th>
-          </tr>
-        </thead>
-        <tbody>
-          {documentsQuery.data?.map((doc) => (
-            <tr key={doc.id}>
-              <td>
-                <Link to={`/domains/${domainId}/documents/${doc.id}/chunks`}>{doc.filename}</Link>
-              </td>
-              <td>
-                <Badge tone={STATUS_TONE[doc.status]}>{doc.status}</Badge>
-                {doc.status === 'failed' && doc.error_message && <div className="muted">{doc.error_message}</div>}
-              </td>
-              <td>{doc.ocr_used ? 'Yes' : 'No'}</td>
-              <td>{new Date(doc.uploaded_at).toLocaleString()}</td>
-            </tr>
-          ))}
-          {documentsQuery.data?.length === 0 && (
+      {documentsQuery.isLoading && <SkeletonTable />}
+      {documentsQuery.data?.length === 0 && (
+        <EmptyState
+          title="No documents yet"
+          description="Upload a PDF or DOCX to start building this domain's knowledge base."
+          action={{ label: 'Upload document', onClick: () => fileInputRef.current?.click() }}
+        />
+      )}
+      {documentsQuery.data && documentsQuery.data.length > 0 && (
+        <table className="table">
+          <thead>
             <tr>
-              <td colSpan={4}>No documents yet.</td>
+              <th>Filename</th>
+              <th>Status</th>
+              <th>OCR</th>
+              <th>Uploaded</th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {documentsQuery.data.map((doc) => (
+              <tr key={doc.id}>
+                <td>
+                  <Link to={`/domains/${domainId}/documents/${doc.id}/chunks`}>{doc.filename}</Link>
+                </td>
+                <td>
+                  <Badge tone={STATUS_TONE[doc.status]}>{doc.status}</Badge>
+                  {doc.status === 'failed' && doc.error_message && <div className="muted">{doc.error_message}</div>}
+                </td>
+                <td>{doc.ocr_used ? 'Yes' : 'No'}</td>
+                <td>{new Date(doc.uploaded_at).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

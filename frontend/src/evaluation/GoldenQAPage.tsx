@@ -9,17 +9,19 @@ import {
   updateGoldenQaItem,
 } from '../api/evaluation'
 import { ApiError } from '../api/client'
+import { useToast } from '../components/ToastProvider'
 import type { GoldenQAItemResponse } from '../api/types'
 import { Button } from '../components/Button'
+import { EmptyState } from '../components/EmptyState'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Modal } from '../components/Modal'
-import { Spinner } from '../components/Spinner'
+import { Skeleton } from '../components/Skeleton'
 
 export function GoldenQAPage() {
   const { domainId } = useParams<{ domainId: string }>()
   const queryClient = useQueryClient()
+  const { addToast } = useToast()
   const [editingItem, setEditingItem] = useState<GoldenQAItemResponse | 'new' | null>(null)
-  const [regressionMessage, setRegressionMessage] = useState<string | null>(null)
   const [regressionError, setRegressionError] = useState<string | null>(null)
 
   const itemsQuery = useQuery({
@@ -30,16 +32,26 @@ export function GoldenQAPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (itemId: string) => deleteGoldenQaItem(domainId!, itemId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['golden-qa', domainId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['golden-qa', domainId] })
+      addToast('Golden item deleted', 'success')
+    },
   })
 
   const regressionMutation = useMutation({
     mutationFn: () => triggerGoldenRegression(domainId!),
-    onSuccess: () => setRegressionMessage('Regression run queued -- results will appear in the quality dashboard shortly.'),
+    onSuccess: () => addToast('Regression run queued -- results will appear in the quality dashboard shortly.', 'success'),
     onError: (err) => setRegressionError(err instanceof ApiError ? err.message : 'Could not trigger regression'),
   })
 
-  if (itemsQuery.isLoading) return <Spinner />
+  if (itemsQuery.isLoading) {
+    return (
+      <div>
+        <h1>Golden Q&amp;A</h1>
+        <Skeleton height="8rem" />
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -52,7 +64,6 @@ export function GoldenQAPage() {
           <Button onClick={() => setEditingItem('new')}>Add item</Button>
         </div>
       </div>
-      {regressionMessage && <p className="auth-success">{regressionMessage}</p>}
       {regressionError && <ErrorBanner message={regressionError} />}
       {itemsQuery.error && (
         <ErrorBanner
@@ -82,17 +93,24 @@ export function GoldenQAPage() {
             </div>
           </div>
         ))}
-        {itemsQuery.data?.length === 0 && <p className="muted">No golden Q&amp;A items yet.</p>}
       </div>
+      {itemsQuery.data?.length === 0 && (
+        <EmptyState
+          title="No golden Q&A items yet"
+          description="Curate known-good question/answer pairs to catch regressions automatically after ingestion or model changes."
+          action={{ label: 'Add item', onClick: () => setEditingItem('new') }}
+        />
+      )}
 
       {editingItem && (
         <GoldenQaFormModal
           domainId={domainId!}
           item={editingItem === 'new' ? null : editingItem}
           onClose={() => setEditingItem(null)}
-          onSuccess={() => {
+          onSuccess={(isNew) => {
             setEditingItem(null)
             queryClient.invalidateQueries({ queryKey: ['golden-qa', domainId] })
+            addToast(isNew ? 'Golden item added' : 'Golden item updated', 'success')
           }}
         />
       )}
@@ -109,7 +127,7 @@ function GoldenQaFormModal({
   domainId: string
   item: GoldenQAItemResponse | null
   onClose: () => void
-  onSuccess: () => void
+  onSuccess: (isNew: boolean) => void
 }) {
   const [question, setQuestion] = useState(item?.question ?? '')
   const [expectedAnswer, setExpectedAnswer] = useState(item?.expected_answer ?? '')
@@ -128,7 +146,7 @@ function GoldenQaFormModal({
       }
       return item ? updateGoldenQaItem(domainId, item.id, payload) : createGoldenQaItem(domainId, payload)
     },
-    onSuccess,
+    onSuccess: () => onSuccess(!item),
     onError: (err) => setError(err instanceof ApiError ? err.message : 'Could not save item'),
   })
 

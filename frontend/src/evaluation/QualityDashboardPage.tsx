@@ -7,7 +7,7 @@ import { ApiError } from '../api/client'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { Spinner } from '../components/Spinner'
+import { Skeleton } from '../components/Skeleton'
 
 const DIMENSION_COLORS: Record<string, string> = {
   faithfulness: '#2563eb',
@@ -45,7 +45,14 @@ export function QualityDashboardPage() {
     }
   }
 
-  if (dashboardQuery.isLoading) return <Spinner />
+  if (dashboardQuery.isLoading) {
+    return (
+      <div>
+        <h1>Quality dashboard</h1>
+        <Skeleton height="10rem" />
+      </div>
+    )
+  }
   if (dashboardQuery.error) {
     return (
       <ErrorBanner

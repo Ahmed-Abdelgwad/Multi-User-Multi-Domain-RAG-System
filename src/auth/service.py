@@ -70,7 +70,8 @@ def register_user(db: Session, register_user_request: models.RegisterUserRequest
         email=register_user_request.email,
         first_name=register_user_request.first_name,
         last_name=register_user_request.last_name,
-        password_hash=get_password_hash(register_user_request.password)
+        password_hash=get_password_hash(register_user_request.password),
+        is_platform_admin=settings.is_platform_admin_email(register_user_request.email),
     )
     db.add(create_user_model)
     db.commit()
@@ -168,6 +169,7 @@ def find_or_create_sso_user(db: Session, pool: UserType, identity: ExternalIdent
         user_type=pool,
         auth_provider=AuthProviderType.OIDC,
         external_id=identity.subject,
+        is_platform_admin=settings.is_platform_admin_email(identity.email),
     )
     db.add(user)
     db.commit()

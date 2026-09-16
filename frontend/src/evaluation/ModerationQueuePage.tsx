@@ -3,18 +3,21 @@ import { useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getModerationQueue, overrideEvaluation, setEvaluationVerdict } from '../api/evaluation'
 import { ApiError } from '../api/client'
+import { useToast } from '../components/ToastProvider'
 import type { ModerationQueueItemResponse } from '../api/types'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
+import { EmptyState } from '../components/EmptyState'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Modal } from '../components/Modal'
-import { Spinner } from '../components/Spinner'
+import { Skeleton } from '../components/Skeleton'
 
 const DIMENSIONS = ['faithfulness', 'relevance', 'completeness', 'citation_accuracy'] as const
 
 export function ModerationQueuePage() {
   const { domainId } = useParams<{ domainId: string }>()
   const queryClient = useQueryClient()
+  const { addToast } = useToast()
   const [overrideTarget, setOverrideTarget] = useState<ModerationQueueItemResponse | null>(null)
 
   const queueQuery = useQuery({
@@ -26,10 +29,20 @@ export function ModerationQueuePage() {
   const verdictMutation = useMutation({
     mutationFn: ({ queryLogId, verdict }: { queryLogId: string; verdict: 'accepted' | 'rejected' }) =>
       setEvaluationVerdict(domainId!, queryLogId, { verdict, rationale: `${verdict} via console` }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['moderation-queue', domainId] }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['moderation-queue', domainId] })
+      addToast(variables.verdict === 'accepted' ? 'Answer accepted' : 'Answer rejected', 'success')
+    },
   })
 
-  if (queueQuery.isLoading) return <Spinner />
+  if (queueQuery.isLoading) {
+    return (
+      <div>
+        <h1>Moderation queue</h1>
+        <Skeleton height="8rem" />
+      </div>
+    )
+  }
   if (queueQuery.error) {
     return (
       <ErrorBanner
@@ -41,7 +54,12 @@ export function ModerationQueuePage() {
   return (
     <div>
       <h1>Moderation queue</h1>
-      {queueQuery.data?.length === 0 && <p className="muted">Nothing flagged right now.</p>}
+      {queueQuery.data?.length === 0 && (
+        <EmptyState
+          title="Nothing flagged right now"
+          description="Answers that fall below this domain's quality threshold show up here for review."
+        />
+      )}
       <div className="moderation-list">
         {queueQuery.data?.map((item) => (
           <div key={item.query_log_id} className="moderation-card">
@@ -115,6 +133,7 @@ function OverrideModal({
   onClose: () => void
   onSuccess: () => void
 }) {
+  const { addToast } = useToast()
   const [scores, setScores] = useState({
     faithfulness: item.faithfulness ?? 0,
     relevance: item.relevance ?? 0,
@@ -126,7 +145,10 @@ function OverrideModal({
 
   const mutation = useMutation({
     mutationFn: () => overrideEvaluation(domainId, item.query_log_id, { ...scores, rationale }),
-    onSuccess,
+    onSuccess: () => {
+      addToast('Evaluation overridden', 'success')
+      onSuccess()
+    },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'Could not override evaluation'),
   })
 

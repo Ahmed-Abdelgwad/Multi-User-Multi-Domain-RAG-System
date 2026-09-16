@@ -1,6 +1,6 @@
 from typing import List
 from uuid import UUID
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from src.database.core import DbSession
 from src.auth.service import CurrentUser
 from src.entities.user import User
@@ -11,6 +11,8 @@ from src.authz.dependencies import (
     require_platform_admin,
     require_domain_admin_or_platform_admin,
 )
+from src.users import models as user_models
+from src.users import service as user_service
 from . import models
 from . import service
 
@@ -54,6 +56,19 @@ def archive_domain(
 @router.get("/{domain_id}/roles", response_model=List[models.UserDomainRoleResponse])
 def list_domain_roles(db: DbSession, domain_id: UUID, _role: DomainRole = Depends(RequireDomainAdmin)):
     return service.list_domain_roles(db, domain_id)
+
+
+@router.get("/{domain_id}/roles/lookup", response_model=List[user_models.UserResponse])
+def lookup_users_to_invite(
+    db: DbSession,
+    domain_id: UUID,
+    email: str = Query(min_length=2),
+    _=Depends(require_domain_admin_or_platform_admin),
+):
+    # Scoped to "admin of this specific domain" rather than a global
+    # /users/search -- narrows the "who can enumerate the user directory"
+    # surface to the same trust boundary already used for archive_domain.
+    return user_service.search_users_by_email(db, email)
 
 
 @router.post("/{domain_id}/roles", response_model=models.UserDomainRoleResponse, status_code=status.HTTP_201_CREATED)

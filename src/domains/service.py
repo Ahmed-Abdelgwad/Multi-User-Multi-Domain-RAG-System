@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 from . import models
 from src.entities.domain import Domain
+from src.entities.user import User
 from src.entities.user_domain_role import UserDomainRole
 from src.entities.enums import DomainRole
 from src.exceptions import DomainNotFoundError, DomainArchivedError, DuplicateDomainNameError
@@ -73,9 +74,21 @@ def list_domains_for_user(db: Session, user_id: UUID, is_platform_admin: bool = 
     )
 
 
-def list_domain_roles(db: Session, domain_id: UUID) -> list[UserDomainRole]:
+def list_domain_roles(db: Session, domain_id: UUID) -> list[models.UserDomainRoleResponse]:
     get_domain_or_raise(db, domain_id)
-    return db.query(UserDomainRole).filter(UserDomainRole.domain_id == domain_id).all()
+    rows = (
+        db.query(UserDomainRole, User.email)
+        .join(User, User.id == UserDomainRole.user_id)
+        .filter(UserDomainRole.domain_id == domain_id)
+        .all()
+    )
+    return [
+        models.UserDomainRoleResponse(
+            user_id=role.user_id, domain_id=role.domain_id, role=role.role,
+            granted_at=role.granted_at, user_email=email,
+        )
+        for role, email in rows
+    ]
 
 
 def assign_role(db: Session, domain_id: UUID, request: models.AssignRoleRequest, granted_by: UUID) -> UserDomainRole:

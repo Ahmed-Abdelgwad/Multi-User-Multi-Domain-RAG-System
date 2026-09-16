@@ -4,7 +4,9 @@ from . import models
 from src.entities.user import User
 from src.entities.domain import Domain
 from src.entities.user_domain_role import UserDomainRole
-from src.exceptions import UserNotFoundError, InvalidPasswordError, PasswordMismatchError
+from src.exceptions import (
+    UserNotFoundError, InvalidPasswordError, PasswordMismatchError, CannotModifyOwnPlatformAdminStatusError,
+)
 from src.auth.service import verify_password, get_password_hash
 import logging
 
@@ -57,3 +59,29 @@ def get_user_domains(db: Session, user_id: UUID) -> list[models.UserDomainMember
         )
         for role, domain in rows
     ]
+
+
+def list_all_users(db: Session, limit: int = 50, offset: int = 0) -> list[User]:
+    return db.query(User).order_by(User.email).offset(offset).limit(limit).all()
+
+
+def search_users_by_email(db: Session, email_query: str, limit: int = 10) -> list[User]:
+    return (
+        db.query(User)
+        .filter(User.email.ilike(f"%{email_query}%"))
+        .order_by(User.email)
+        .limit(limit)
+        .all()
+    )
+
+
+def set_platform_admin(db: Session, target_user_id: UUID, is_platform_admin: bool, acting_user_id: UUID) -> User:
+    if target_user_id == acting_user_id:
+        raise CannotModifyOwnPlatformAdminStatusError()
+    user = get_user_by_id(db, target_user_id)
+    user.is_platform_admin = is_platform_admin
+    db.commit()
+    db.refresh(user)
+    logging.info(f"Platform admin status for user {target_user_id} set to {is_platform_admin} by {acting_user_id}")
+    # AUDIT HOOK: record platform-admin grant/revoke
+    return user

@@ -28,3 +28,9 @@ class UserDomainRoleResponse(BaseModel):
     domain_id: UUID
     role: DomainRole
     granted_at: datetime
+    # Populated by list_domain_roles (joins Users) so the frontend never
+    # has to show a bare UUID for "who has this role" -- None on
+    # assign_role/revoke_role's own responses, which return the plain
+    # UserDomainRole row and don't need it (the roles table refetches
+    # right after and gets the enriched version).
+    user_email: str | None = None

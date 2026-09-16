@@ -4,11 +4,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { archiveDomain, assignRole, getDomain, listDomainRoles, revokeRole } from '../api/domains'
 import { useAuth } from '../auth/AuthContext'
 import { ApiError } from '../api/client'
-import type { DomainRole } from '../api/types'
+import { useToast } from '../components/ToastProvider'
+import type { DomainRole, UserResponse } from '../api/types'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Spinner } from '../components/Spinner'
+import { UserSearchCombobox } from '../components/UserSearchCombobox'
 
 const ROLE_OPTIONS: DomainRole[] = ['reader', 'contributor', 'domain_admin']
 
@@ -27,9 +29,14 @@ export function DomainDetailPage() {
   const myRole = myDomains.find((d) => d.domain_id === domainId)?.role
   const isDomainAdmin = Boolean(user?.is_platform_admin || myRole === 'domain_admin')
 
+  const { addToast } = useToast()
+
   const archiveMutation = useMutation({
     mutationFn: () => archiveDomain(domainId!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['domain', domainId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domain', domainId] })
+      addToast('Domain archived', 'success')
+    },
   })
 
   if (domainQuery.isLoading) return <Spinner />
@@ -93,24 +100,29 @@ export function DomainDetailPage() {
 
 function RolesTab({ domainId }: { domainId: string }) {
   const queryClient = useQueryClient()
-  const [userId, setUserId] = useState('')
+  const { addToast } = useToast()
+  const [selectedUser, setSelectedUser] = useState<UserResponse | null>(null)
   const [role, setRole] = useState<DomainRole>('reader')
   const [formError, setFormError] = useState<string | null>(null)
 
   const rolesQuery = useQuery({ queryKey: ['domain-roles', domainId], queryFn: () => listDomainRoles(domainId) })
 
   const assignMutation = useMutation({
-    mutationFn: () => assignRole(domainId, { user_id: userId, role }),
+    mutationFn: () => assignRole(domainId, { user_id: selectedUser!.id, role }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['domain-roles', domainId] })
-      setUserId('')
+      addToast(`${selectedUser!.email} granted ${role}`, 'success')
+      setSelectedUser(null)
     },
     onError: (err) => setFormError(err instanceof ApiError ? err.message : 'Could not assign role'),
   })
 
   const revokeMutation = useMutation({
     mutationFn: (targetUserId: string) => revokeRole(domainId, targetUserId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['domain-roles', domainId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domain-roles', domainId] })
+      addToast('Role revoked', 'success')
+    },
   })
 
   if (rolesQuery.isLoading) return <Spinner />
@@ -120,7 +132,7 @@ function RolesTab({ domainId }: { domainId: string }) {
       <table className="table">
         <thead>
           <tr>
-            <th>User ID</th>
+            <th>User</th>
             <th>Role</th>
             <th>Granted</th>
             <th />
@@ -129,9 +141,7 @@ function RolesTab({ domainId }: { domainId: string }) {
         <tbody>
           {rolesQuery.data?.map((r) => (
             <tr key={r.user_id}>
-              <td>
-                <code>{r.user_id}</code>
-              </td>
+              <td>{r.user_email ?? <code>{r.user_id}</code>}</td>
               <td>
                 <Badge tone="info">{r.role}</Badge>
               </td>
@@ -156,7 +166,6 @@ function RolesTab({ domainId }: { domainId: string }) {
       </table>
 
       <h3>Assign role</h3>
-      <p className="muted">No user directory endpoint exists yet -- paste the user's UUID directly.</p>
       {formError && <ErrorBanner message={formError} />}
       <form
         className="inline-form"
@@ -167,8 +176,19 @@ function RolesTab({ domainId }: { domainId: string }) {
         }}
       >
         <label>
-          User ID
-          <input value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="uuid" required />
+          User
+          {selectedUser ? (
+            <div className="selected-user-chip">
+              <span>
+                {selectedUser.first_name} {selectedUser.last_name} &lt;{selectedUser.email}&gt;
+              </span>
+              <button type="button" className="chip-clear" onClick={() => setSelectedUser(null)} aria-label="Clear">
+                ×
+              </button>
+            </div>
+          ) : (
+            <UserSearchCombobox domainId={domainId} onSelect={setSelectedUser} />
+          )}
         </label>
         <label>
           Role
@@ -180,7 +200,7 @@ function RolesTab({ domainId }: { domainId: string }) {
             ))}
           </select>
         </label>
-        <Button type="submit" disabled={assignMutation.isPending}>
+        <Button type="submit" disabled={assignMutation.isPending || !selectedUser}>
           {assignMutation.isPending ? 'Assigning...' : 'Assign'}
         </Button>
       </form>

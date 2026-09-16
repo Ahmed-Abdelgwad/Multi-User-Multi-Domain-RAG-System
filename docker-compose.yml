@@ -24,6 +24,7 @@ services:
       - LOCAL_LLM_MODEL_NAME=qwen3:4b
       - OLLAMA_BASE_URL=http://ollama:11434
       - INCEPTION_API_KEY=${INCEPTION_API_KEY:-}
+      - PLATFORM_ADMIN_EMAILS=${PLATFORM_ADMIN_EMAILS:-}
     depends_on:
       - db
       - redis

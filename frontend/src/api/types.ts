@@ -40,6 +40,7 @@ export interface UserDomainRoleResponse {
   domain_id: string
   role: DomainRole
   granted_at: string
+  user_email: string | null
 }
 
 export interface TableExtractResponse {

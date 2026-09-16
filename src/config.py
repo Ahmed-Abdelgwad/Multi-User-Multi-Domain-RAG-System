@@ -20,6 +20,18 @@ class Settings(BaseSettings):
     # dev server by default; add the deployed frontend's origin in prod).
     cors_allowed_origins: list[str] = ["http://localhost:5173"]
 
+    # Platform-admin bootstrap: comma-separated emails, auto-promoted to
+    # is_platform_admin the moment they register (or first SSO-login).
+    # Plain string, not list[str] -- avoids pydantic-settings' JSON-array
+    # parsing for list envs, consistent with every other plain field here.
+    # Only needed once: the first admin promotes everyone else afterward
+    # via PUT /users/{id}/platform-admin.
+    platform_admin_emails: str = ""
+
+    def is_platform_admin_email(self, email: str) -> bool:
+        allowlist = {e.strip().lower() for e in self.platform_admin_emails.split(",") if e.strip()}
+        return email.strip().lower() in allowlist
+
     database_url: str = "postgresql://postgres:postgres@db:5432/cleanfastapi"
 
     oidc_internal_discovery_url: str | None = None

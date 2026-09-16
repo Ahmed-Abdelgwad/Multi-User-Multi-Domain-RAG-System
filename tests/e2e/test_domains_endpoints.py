@@ -73,6 +73,10 @@ def test_domain_admin_can_assign_and_revoke_roles(client: TestClient, platform_a
     assert assign_response.status_code == 201
     assert assign_response.json()["role"] == "contributor"
 
+    roles_before_revoke = client.get(f"/domains/{domain_id}/roles", headers=platform_admin_headers).json()
+    target_row = next(r for r in roles_before_revoke if r["user_id"] == str(target_user_id))
+    assert target_row["user_email"]  # list_domain_roles enriches with the real email, not just a bare UUID
+
     revoke_response = client.delete(
         f"/domains/{domain_id}/roles/{target_user_id}", headers=platform_admin_headers
     )
@@ -80,6 +84,38 @@ def test_domain_admin_can_assign_and_revoke_roles(client: TestClient, platform_a
 
     roles_response = client.get(f"/domains/{domain_id}/roles", headers=platform_admin_headers)
     assert all(r["user_id"] != str(target_user_id) for r in roles_response.json())
+
+
+def test_roles_lookup_requires_domain_admin(client: TestClient, platform_admin_headers, make_user_with_role):
+    domain_id = _create_domain(client, platform_admin_headers, name="lookup-domain-rbac").json()["id"]
+    contributor_headers, _ = make_user_with_role(domain_id, DomainRole.CONTRIBUTOR)
+
+    response = client.get(f"/domains/{domain_id}/roles/lookup?email=ex", headers=contributor_headers)
+
+    assert response.status_code == 403
+
+
+def test_roles_lookup_returns_matching_users(client: TestClient, platform_admin_headers):
+    domain_id = _create_domain(client, platform_admin_headers, name="lookup-domain").json()["id"]
+    unique = uuid4().hex[:8]
+    client.post(
+        "/auth/",
+        json={"email": f"findme-{unique}@example.com", "password": "testpassword123", "first_name": "Find", "last_name": "Me"},
+    )
+
+    response = client.get(f"/domains/{domain_id}/roles/lookup?email=findme-{unique}", headers=platform_admin_headers)
+
+    assert response.status_code == 200
+    emails = [u["email"] for u in response.json()]
+    assert f"findme-{unique}@example.com" in emails
+
+
+def test_roles_lookup_requires_minimum_query_length(client: TestClient, platform_admin_headers):
+    domain_id = _create_domain(client, platform_admin_headers, name="lookup-domain-minlen").json()["id"]
+
+    response = client.get(f"/domains/{domain_id}/roles/lookup?email=a", headers=platform_admin_headers)
+
+    assert response.status_code == 422
 
 
 def test_archived_domain_rejects_new_role_assignment(client: TestClient, platform_admin_headers):

@@ -21,6 +21,10 @@ class UserAlreadyExistsError(UserError):
     def __init__(self, email: str):
         super().__init__(status_code=409, detail=f"A user with email '{email}' already exists")
 
+class CannotModifyOwnPlatformAdminStatusError(UserError):
+    def __init__(self):
+        super().__init__(status_code=400, detail="You cannot change your own platform admin status")
+
 class AuthenticationError(HTTPException):
     def __init__(self, message: str = "Could not validate user"):
         super().__init__(status_code=401, detail=message)

@@ -23,3 +23,7 @@ class UserDomainMembership(BaseModel):
     domain_name: str
     role: DomainRole
     granted_at: datetime
+
+
+class PlatformAdminUpdate(BaseModel):
+    is_platform_admin: bool

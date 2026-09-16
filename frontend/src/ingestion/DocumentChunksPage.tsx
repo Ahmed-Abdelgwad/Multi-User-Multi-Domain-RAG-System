@@ -4,8 +4,9 @@ import { listChunks } from '../api/chunks'
 import { getDocument } from '../api/documents'
 import { ApiError } from '../api/client'
 import { Badge } from '../components/Badge'
+import { EmptyState } from '../components/EmptyState'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { Spinner } from '../components/Spinner'
+import { Skeleton } from '../components/Skeleton'
 
 export function DocumentChunksPage() {
   const { domainId, documentId } = useParams<{ domainId: string; documentId: string }>()
@@ -22,7 +23,16 @@ export function DocumentChunksPage() {
     enabled: Boolean(domainId && documentId),
   })
 
-  if (documentQuery.isLoading || chunksQuery.isLoading) return <Spinner />
+  if (documentQuery.isLoading || chunksQuery.isLoading) {
+    return (
+      <div>
+        <Skeleton width="40%" height="1.5rem" />
+        <div style={{ marginTop: '1rem' }}>
+          <Skeleton height="6rem" />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -34,6 +44,12 @@ export function DocumentChunksPage() {
         <ErrorBanner message={chunksQuery.error instanceof ApiError ? chunksQuery.error.message : 'Could not load chunks'} />
       )}
       <p className="muted">{chunksQuery.data?.length ?? 0} chunks</p>
+      {chunksQuery.data?.length === 0 && (
+        <EmptyState
+          title="No chunks yet"
+          description="This document hasn't finished indexing. Come back and refresh once its status on the documents list shows ready."
+        />
+      )}
       <div className="chunk-list">
         {chunksQuery.data?.map((chunk) => (
           <div key={chunk.id} className="chunk-card">
@@ -45,7 +61,6 @@ export function DocumentChunksPage() {
             <pre className="chunk-content">{chunk.content}</pre>
           </div>
         ))}
-        {chunksQuery.data?.length === 0 && <p className="muted">No chunks yet -- check back once the document finishes indexing.</p>}
       </div>
     </div>
   )
