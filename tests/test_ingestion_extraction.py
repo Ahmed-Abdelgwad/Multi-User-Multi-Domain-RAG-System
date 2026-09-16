@@ -30,6 +30,75 @@ def test_extract_pdf_survives_malformed_creation_date():
     assert result.doc_created_at is None
 
 
+def test_strip_nul_bytes_removes_embedded_nul_characters():
+    assert extraction._strip_nul_bytes("Hello\x00World") == "HelloWorld"
+    assert extraction._strip_nul_bytes("clean text") == "clean text"
+
+
+class _FakeGlyph:
+    def __init__(self, text: str, bbox: tuple[float, float, float, float]):
+        self.text = text
+        self.bbox = bbox
+
+
+class _FakeTextObj:
+    """Mimics `playa`'s `TextObject`: iterable over per-glyph objects,
+    with its own bbox derived from its glyphs (for page-level sorting)."""
+
+    def __init__(self, glyphs: list[_FakeGlyph]):
+        self.object_type = "text"
+        self._glyphs = glyphs
+        xs = [g.bbox[0] for g in glyphs] + [g.bbox[2] for g in glyphs]
+        ys = [g.bbox[1] for g in glyphs] + [g.bbox[3] for g in glyphs]
+        self.bbox = (min(xs), min(ys), max(xs), max(ys))
+
+    def __iter__(self):
+        return iter(self._glyphs)
+
+
+def test_text_object_chars_inserts_spaces_at_word_boundaries():
+    # Regression for a real bug found live against a real arXiv-generated
+    # PDF: `playa`'s raw `.chars` property concatenates decoded glyphs with
+    # no inter-word spacing at all when a PDF encodes spacing between words
+    # purely via `TJ`-array position adjustments rather than a literal space
+    # glyph -- a whole line decoded to one glued-together run of words
+    # ("FromLocaltoGlobal..."). Real measurements on that document: genuine
+    # word gaps were 27-35% of glyph height; kerning noise within a word
+    # never exceeded ~6%. This fixture reproduces that exact shape.
+    glyphs = [
+        _FakeGlyph("H", (0.0, 0.0, 8.0, 10.0)),
+        _FakeGlyph("i", (8.0, 0.0, 10.0, 10.0)),  # no gap: same word
+        _FakeGlyph("t", (13.0, 0.0, 15.0, 10.0)),  # gap 3.0 / height 10 = 30%: new word
+        _FakeGlyph("h", (15.0, 0.0, 17.0, 10.0)),
+        _FakeGlyph("e", (17.0, 0.0, 19.0, 10.0)),
+        _FakeGlyph("r", (19.2, 0.0, 21.0, 10.0)),  # 2% kerning gap: same word
+        _FakeGlyph("e", (21.0, 0.0, 23.0, 10.0)),
+    ]
+
+    assert extraction._text_object_chars(_FakeTextObj(glyphs)) == "Hi there"
+
+
+def test_text_object_chars_does_not_double_space_a_real_space_glyph():
+    glyphs = [
+        _FakeGlyph("a", (0.0, 0.0, 8.0, 10.0)),
+        _FakeGlyph(" ", (8.0, 0.0, 12.0, 10.0)),
+        _FakeGlyph("b", (12.0, 0.0, 20.0, 10.0)),
+    ]
+
+    assert extraction._text_object_chars(_FakeTextObj(glyphs)) == "a b"
+
+
+def test_page_plain_text_strips_nul_bytes():
+    # Regression for a real bug found live: uploading a real arXiv-generated
+    # PDF failed the whole document with a genuine Postgres error ("A string
+    # literal cannot contain NUL (0x00) characters") -- playa's character-level
+    # decoding of that PDF's embedded/CID-keyed fonts decoded certain glyphs
+    # to a literal NUL byte, which Postgres text columns reject outright.
+    page = [_FakeTextObj([_FakeGlyph("Hello\x00World", (0.0, 0.0, 10.0, 10.0))])]
+
+    assert extraction._page_plain_text(page) == "HelloWorld"
+
+
 def test_reconstruct_paragraphs_joins_wrapped_lines_and_splits_on_terminal_punctuation():
     # playa's actual output shape (verified live, same as PyPDFLoader's
     # before it): one line per rendered line, no blank lines between

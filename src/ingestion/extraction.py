@@ -68,7 +68,7 @@ def _read_pdf_metadata(tmp_path: Path) -> tuple[str | None, datetime | None]:
     if not meta:
         return None, None
 
-    author = meta.author
+    author = _strip_nul_bytes(meta.author) if meta.author else None
     try:
         doc_created_at = meta.creation_date
     except Exception as e:
@@ -97,6 +97,45 @@ def _reconstruct_paragraphs(text: str) -> str:
     return "\n\n".join(paragraphs)
 
 
+def _strip_nul_bytes(text: str) -> str:
+    # Certain embedded/CID-keyed fonts (seen live on a real arXiv-generated
+    # PDF) decode undefined glyphs to a literal NUL (\x00) via playa/Camelot
+    # -- Postgres text columns reject any string containing one outright,
+    # failing the whole document. Strip at every point raw text first enters
+    # this module, before it's wrapped in a dataclass or persisted.
+    return text.replace("\x00", "")
+
+
+_WORD_GAP_RATIO = 0.15
+
+
+def _text_object_chars(text_obj) -> str:
+    # `playa`'s own `.chars` property just concatenates a text object's
+    # decoded glyphs with no inter-word spacing at all when a PDF encodes
+    # spacing between words purely as a `TJ`-array position adjustment
+    # rather than a literal space glyph -- confirmed live against a real
+    # arXiv-generated PDF, where entire lines decoded to one unbroken run
+    # of glued-together words (e.g. "FromLocaltoGlobal..."). Reconstruct
+    # spacing from actual glyph positions: a genuine word gap on this
+    # document measured 27-35% of the preceding glyph's height, while
+    # kerning noise within a word never exceeded ~6%.
+    parts: list[str] = []
+    prev_bbox: tuple[float, float, float, float] | None = None
+    for glyph in text_obj:
+        text = glyph.text
+        if text is None:
+            continue
+        bbox = glyph.bbox
+        if prev_bbox is not None and not text.isspace():
+            height = prev_bbox[3] - prev_bbox[1]
+            gap = bbox[0] - prev_bbox[2]
+            if height > 0 and gap / height > _WORD_GAP_RATIO:
+                parts.append(" ")
+        parts.append(text)
+        prev_bbox = bbox
+    return "".join(parts)
+
+
 def _midpoint_y(obj) -> float:
     return (obj.bbox[1] + obj.bbox[3]) / 2
 
@@ -113,7 +152,7 @@ def _page_text_objects(page) -> list:
 
 
 def _page_plain_text(page) -> str:
-    return "\n".join(obj.chars for obj in _page_text_objects(page))
+    return _strip_nul_bytes("\n".join(_text_object_chars(obj) for obj in _page_text_objects(page)))
 
 
 def _split_page_by_tables(page, page_tables: list[TableExtract]) -> list[DocumentElement]:
@@ -141,14 +180,14 @@ def _split_page_by_tables(page, page_tables: list[TableExtract]) -> list[Documen
             before.append(prose[idx][0])
             idx += 1
         if before:
-            text = _reconstruct_paragraphs("\n".join(o.chars for o in before))
+            text = _reconstruct_paragraphs(_strip_nul_bytes("\n".join(_text_object_chars(o) for o in before)))
             if text.strip():
                 segments.append(DocumentElement(kind="text", content=text))
         segments.append(DocumentElement(kind="table", content=table.markdown))
 
     remaining = [o for o, _mid in prose[idx:]]
     if remaining:
-        text = _reconstruct_paragraphs("\n".join(o.chars for o in remaining))
+        text = _reconstruct_paragraphs(_strip_nul_bytes("\n".join(_text_object_chars(o) for o in remaining)))
         if text.strip():
             segments.append(DocumentElement(kind="text", content=text))
     return segments
@@ -231,7 +270,7 @@ def _ocr_pdf(raw_bytes: bytes) -> str:
     import pytesseract
 
     images = convert_from_bytes(raw_bytes)
-    return "\n".join(pytesseract.image_to_string(image) for image in images)
+    return _strip_nul_bytes("\n".join(pytesseract.image_to_string(image) for image in images))
 
 
 def _extract_tables_camelot(pdf_path: str) -> list[TableExtract]:
@@ -247,7 +286,7 @@ def _extract_tables_camelot(pdf_path: str) -> list[TableExtract]:
         qualifying = [
             TableExtract(
                 page=int(table.parsing_report.get("page", 0)),
-                markdown=table.df.to_markdown(index=False),
+                markdown=_strip_nul_bytes(table.df.to_markdown(index=False)),
                 bbox=table._bbox,
             )
             for table in found
@@ -264,14 +303,14 @@ def _extract_tables_camelot(pdf_path: str) -> list[TableExtract]:
 def extract_docx(raw_bytes: bytes) -> ExtractionResult:
     tmp_path = _spool_to_tempfile(raw_bytes, ".docx")
     try:
-        text = "\n".join(doc.page_content for doc in Docx2txtLoader(str(tmp_path)).load())
+        text = _strip_nul_bytes("\n".join(doc.page_content for doc in Docx2txtLoader(str(tmp_path)).load()))
 
         document = python_docx.Document(str(tmp_path))
 
         # Docx2txtLoader doesn't surface core_properties; read those via
         # python-docx directly.
         props = document.core_properties
-        author = props.author or None
+        author = _strip_nul_bytes(props.author) if props.author else None
         doc_created_at = props.created
 
         elements = _docx_elements(document)
@@ -294,12 +333,12 @@ def _docx_elements(document: DocxDocument) -> list[DocumentElement]:
     prose_buffer: list[str] = []
     for child in document.element.body.iterchildren():
         if child.tag == qn("w:p"):
-            text = DocxParagraph(child, document).text.strip()
+            text = _strip_nul_bytes(DocxParagraph(child, document).text.strip())
             if text:
                 prose_buffer.append(text)
         elif child.tag == qn("w:tbl"):
             table = DocxTable(child, document)
-            rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+            rows = [[_strip_nul_bytes(cell.text.strip()) for cell in row.cells] for row in table.rows]
             if len(rows) < 2 or any(len(row) < 2 for row in rows):
                 continue
             if prose_buffer:
