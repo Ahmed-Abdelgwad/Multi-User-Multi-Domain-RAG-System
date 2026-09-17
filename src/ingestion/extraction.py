@@ -243,13 +243,30 @@ def _detect_running_headers_footers(pages: list) -> frozenset:
     return frozenset(line for line, count in counts.items() if count >= threshold)
 
 
+def _iter_text_objects(container):
+    # Recurse into nested Form XObjects -- matplotlib (and other
+    # vector-graphics exporters) commonly render an entire figure,
+    # including every axis/legend/data-label text run, inside one, so a
+    # flat `for obj in page` misses it completely. Confirmed live: a
+    # real paper's Figure 4 had zero of its 115 text runs at the top
+    # page level -- every one, including every chart number, was nested
+    # one Form XObject deep (with a further 24 XObjects nested inside
+    # that one, hence the recursion rather than a single extra level).
+    for obj in container:
+        if obj.object_type == "text":
+            yield obj
+        elif obj.object_type == "xobject":
+            yield from _iter_text_objects(obj)
+
+
 def _page_text_objects(page, skip_lines: frozenset = frozenset()) -> list:
-    """All of a page's text runs, in true reading order (see
-    `_order_page_text_objects`), minus any running header/footer lines.
+    """All of a page's text runs -- including any nested inside Form
+    XObjects -- in true reading order (see `_order_page_text_objects`),
+    minus any running header/footer lines.
     """
     objs = [
-        obj for obj in page
-        if obj.object_type == "text" and _text_object_chars(obj).strip() not in skip_lines
+        obj for obj in _iter_text_objects(page)
+        if _text_object_chars(obj).strip() not in skip_lines
     ]
     return _order_page_text_objects(objs)
 
@@ -296,6 +313,85 @@ def _split_page_by_tables(page, page_tables: list[TableExtract], skip_lines: fro
     return segments
 
 
+_FIGURE_CAPTION_RE = re.compile(r"^figure\s+\d+\s*[:.]", re.IGNORECASE)
+_FIGURE_CITATION_RE = re.compile(r"https?://|doi:|arxiv:", re.IGNORECASE)
+_REFERENCE_ENTRY_RE = re.compile(r"^\[\d+\]")
+_FIGURE_DATA_MIN_TOKENS = 6
+_FIGURE_DATA_MIN_RATIO = 0.30
+
+
+def _is_figure_data_paragraph(paragraph: str) -> bool:
+    # A vector-drawn chart (matplotlib-style, not a raster image -- so
+    # it's real, extractable text once XObject recursion picks it up --
+    # see `_iter_text_objects`) decodes as a flat run of axis/legend
+    # numbers with no positional link back to which config/metric each
+    # belongs to -- confirmed live against a real paper's Figure 4
+    # ("100% 50% 0% 98% 50% 0%"), which caused a query about one metric
+    # to be answered with a different, well-structured table's numbers
+    # instead. Heuristic: unlike ordinary prose (numbers embedded in real
+    # sentences), a chart-derived paragraph's tokens are overwhelmingly
+    # numeric -- a tick label ("1K"), a delta ("2.2×"), or a bare
+    # value ("0.433") all count, not just a plain digit string, since
+    # real chart axis/legend text mixes those shapes freely.
+    #
+    # A bare ratio isn't enough on its own, though -- confirmed live
+    # against this same paper's own reference list: a bibliography entry
+    # with an arXiv id/DOI/page range ("arXiv preprint arXiv:2404.07220
+    # 1, 1 (2024), 1-12.") can score a *higher* digit ratio than a real
+    # chart paragraph. Every such case found in this document carried a
+    # URL, "doi:", or "arxiv:" marker, or a leading "[N]" reference
+    # number -- none of which genuine chart axis/legend text ever has --
+    # excluded explicitly rather than chasing an ever more elaborate
+    # ratio threshold.
+    if _FIGURE_CITATION_RE.search(paragraph) or _REFERENCE_ENTRY_RE.match(paragraph):
+        return False
+    tokens = paragraph.split()
+    if len(tokens) < _FIGURE_DATA_MIN_TOKENS:
+        return False
+    numeric = sum(1 for t in tokens if any(c.isdigit() for c in t))
+    return numeric / len(tokens) > _FIGURE_DATA_MIN_RATIO
+
+
+def _is_figure_caption(paragraph: str) -> bool:
+    return bool(_FIGURE_CAPTION_RE.match(paragraph.strip()))
+
+
+def _split_figure_blocks(text: str) -> list[DocumentElement]:
+    # Groups contiguous figure-data paragraphs (plus an adjacent "Figure
+    # N:" caption, in either order) into one atomic content_type=figure
+    # element -- same never-split/never-merged treatment PGC already
+    # gives a Camelot table -- so a chart's numbers and the caption that
+    # explains them travel together through chunking, instead of being
+    # split across an arbitrary PGC group boundary or silently blended
+    # into unrelated body prose.
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    elements: list[DocumentElement] = []
+    text_run: list[str] = []
+    figure_run: list[str] = []
+
+    def flush_text() -> None:
+        if text_run:
+            elements.append(DocumentElement(kind="text", content="\n\n".join(text_run)))
+            text_run.clear()
+
+    def flush_figure() -> None:
+        if figure_run:
+            elements.append(DocumentElement(kind="figure", content="\n\n".join(figure_run)))
+            figure_run.clear()
+
+    for paragraph in paragraphs:
+        if _is_figure_data_paragraph(paragraph) or _is_figure_caption(paragraph):
+            flush_text()
+            figure_run.append(paragraph)
+        else:
+            flush_figure()
+            text_run.append(paragraph)
+
+    flush_figure()
+    flush_text()
+    return elements
+
+
 def _pdf_elements(playa_pages: list, tables: list[TableExtract], skip_lines: frozenset = frozenset()) -> list[DocumentElement]:
 
     tables_by_page: dict[int, list[TableExtract]] = {}
@@ -323,12 +419,12 @@ def _pdf_elements(playa_pages: list, tables: list[TableExtract], skip_lines: fro
                 prose_buffer.append(seg.content)
                 continue
             if prose_buffer:
-                elements.append(DocumentElement(kind="text", content="\n\n".join(prose_buffer)))
+                elements.extend(_split_figure_blocks("\n\n".join(prose_buffer)))
                 prose_buffer = []
             elements.append(seg)
 
     if prose_buffer:
-        elements.append(DocumentElement(kind="text", content="\n\n".join(prose_buffer)))
+        elements.extend(_split_figure_blocks("\n\n".join(prose_buffer)))
     return elements
 
 

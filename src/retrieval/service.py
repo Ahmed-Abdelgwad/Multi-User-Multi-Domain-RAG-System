@@ -9,7 +9,7 @@ from src.authz.retrieval import build_retrieval_filter
 from src.domains.service import raise_if_archived
 from . import models
 
-RETRIEVAL_TOP_K = 5
+RETRIEVAL_TOP_K = 8
 
 
 def get_or_create_retrieval_config(db: Session, domain_id: UUID) -> DomainRetrievalConfig:

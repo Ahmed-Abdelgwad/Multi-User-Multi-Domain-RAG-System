@@ -40,7 +40,9 @@ def generate_answer(query: str, documents: list[Document], config: DomainRetriev
     system_prompt = (
         "Answer the question using ONLY the numbered context passages below. "
         "Cite the passages you rely on inline as [1], [2]. If the passages don't "
-        "contain the answer, say so plainly instead of guessing.\n\n"
+        "contain the answer, say so plainly instead of guessing. "
+        "Give your answer once, directly and concisely -- do not restate, "
+        "repeat, or re-summarize it afterward.\n\n"
         f"Context:\n{_format_context(documents)}"
     )
     try:

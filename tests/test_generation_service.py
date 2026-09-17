@@ -81,6 +81,22 @@ def test_generate_answer_api_route_invokes_chat_model_with_context(monkeypatch):
     assert "[1] Acme is headquartered in Berlin." in system_msg
 
 
+def test_generate_answer_prompt_instructs_against_restating_the_answer(monkeypatch):
+    # Regression for a real bug found live: the API-route model
+    # (ibm-granite/granite-4.2-8b) sometimes restated its own already-
+    # complete, correct answer 2-3 times in slightly different phrasing
+    # within one completion instead of stopping cleanly -- confirmed
+    # unrelated to hidden reasoning tokens (already disabled separately).
+    config = _Config(default=LLMRoute.API)
+    fake_model = _FakeChatModel(content="answer")
+    monkeypatch.setattr(service.llm, "get_api_chat_model", lambda: fake_model)
+
+    service.generate_answer("q", [], config)
+
+    system_msg = fake_model.calls[0][0][1]
+    assert "do not restate, repeat, or re-summarize" in system_msg
+
+
 def test_generate_answer_local_route_when_enabled_invokes_local_model(monkeypatch):
     config = _Config(default=LLMRoute.LOCAL)
     monkeypatch.setattr(service, "get_settings", lambda: _Settings(local_llm_enabled=True))

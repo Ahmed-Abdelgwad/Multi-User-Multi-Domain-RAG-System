@@ -74,6 +74,20 @@ def test_build_documents_no_elements_returns_empty():
     assert chunker.build_documents([], paragraphs_per_chunk=2, overlap=1) == []
 
 
+def test_build_documents_folds_in_figures_as_atomic_documents():
+    elements = [
+        {"kind": "text", "content": "Para one.\n\nPara two."},
+        {"kind": "figure", "content": "0 20 40 60 80 100 120 Rate (%) 100% 50% 0% 98% 50% 0%\n\nFigure 4: Empirical evaluation results."},
+        {"kind": "text", "content": "Para three."},
+    ]
+
+    docs = chunker.build_documents(elements, paragraphs_per_chunk=2, overlap=1)
+
+    assert [d.metadata["content_type"] for d in docs] == ["text", "figure", "text"]
+    assert "Figure 4:" in docs[1].page_content
+    assert "98%" in docs[1].page_content
+
+
 def test_build_documents_table_never_split_even_if_large():
     huge_table_markdown = "| a |\n| --- |\n" + "\n".join(f"| {i} |" for i in range(500))
     elements = [{"kind": "table", "content": huge_table_markdown}]

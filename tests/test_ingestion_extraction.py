@@ -278,3 +278,100 @@ def test_extract_docx_without_table_has_no_tables():
     assert result.tables == []
     assert len(result.elements) == 1
     assert result.elements[0].kind == "text"
+
+
+def test_is_figure_data_paragraph_detects_bare_chart_labels():
+    # Regression for a real bug found live: a vector-drawn chart (not a
+    # raster image, so real extractable text) decoded as a flat run of
+    # axis/legend numbers with no link back to which config/metric each
+    # belonged to -- confirmed against a real paper's Figure 4.
+    chart_soup = "0 20 40 60 80 100 120 Rate (%) 100% 50% 0% 98% 50% 0%"
+
+    assert extraction._is_figure_data_paragraph(chart_soup) is True
+
+
+def test_is_figure_data_paragraph_excludes_bibliography_entries_with_urls():
+    # Regression for a real false positive found live: a reference-list
+    # entry's arXiv id/DOI/page range can score a *higher* digit ratio
+    # than a genuine chart paragraph (e.g. "arXiv preprint
+    # arXiv:2404.07220 1, 1 (2024), 1-12." scored 0.71). Every such case
+    # found in the real document carried a URL/doi:/arxiv: marker no
+    # genuine chart axis/legend text ever has.
+    citation = (
+        "[8] Alex Garcia. 2024. sqlite-vec: A vector search SQLite "
+        "extension. GitHub repository. https://github.com/asg017/sqlite-vec "
+        "Accessed: 2026-04-25."
+    )
+
+    assert extraction._is_figure_data_paragraph(citation) is False
+
+
+def test_is_figure_data_paragraph_excludes_leading_reference_number_without_url():
+    # A reference entry can wrap such that its own URL lands in the next
+    # paragraph, leaving no http/doi/arxiv marker in this fragment --
+    # the leading "[N]" citation number is the fallback signal.
+    citation_fragment = "[28] OpenAI. 2025. gpt-oss-120b & gpt-oss-20b Model Card."
+
+    assert extraction._is_figure_data_paragraph(citation_fragment) is False
+
+
+def test_is_figure_data_paragraph_does_not_flag_ordinary_prose():
+    prose_with_numbers = (
+        "This is negligible relative to inference time (about 3-7s for "
+        "API-based, about 450ms for self-hosted GPU)."
+    )
+
+    assert extraction._is_figure_data_paragraph(prose_with_numbers) is False
+
+
+def test_is_figure_data_paragraph_requires_a_minimum_token_count():
+    assert extraction._is_figure_data_paragraph("100% 0%") is False
+
+
+def test_is_figure_caption_matches_figure_heading():
+    assert extraction._is_figure_caption("Figure 4: Empirical evaluation results.") is True
+    assert extraction._is_figure_caption("This mentions Figure 4 in passing.") is False
+
+
+def test_split_figure_blocks_groups_chart_data_with_its_caption():
+    text = (
+        "Normal prose paragraph before the chart.\n\n"
+        "0 20 40 60 80 100 120 Rate (%) 100% 50% 0% 98% 50% 0%\n\n"
+        "Figure 4: Empirical evaluation results across five dimensions.\n\n"
+        "Normal prose paragraph after the chart."
+    )
+
+    elements = extraction._split_figure_blocks(text)
+
+    kinds = [e.kind for e in elements]
+    assert kinds == ["text", "figure", "text"]
+    assert "before the chart" in elements[0].content
+    assert "98%" in elements[1].content
+    assert "Figure 4:" in elements[1].content
+    assert "after the chart" in elements[2].content
+
+
+def test_split_figure_blocks_with_no_figure_data_returns_one_text_element():
+    text = "First paragraph.\n\nSecond paragraph."
+
+    elements = extraction._split_figure_blocks(text)
+
+    assert len(elements) == 1
+    assert elements[0].kind == "text"
+
+
+def test_extract_pdf_tags_chart_like_content_as_figure():
+    paragraphs = [
+        "This section discusses the evaluation methodology in detail.",
+        "0 20 40 60 80 100 120 Rate (%) 100% 50% 0% 98% 50% 0%",
+        "Figure 4: Empirical evaluation results across five dimensions.",
+        "The next section discusses related work in the field.",
+    ]
+
+    result = extraction.extract_pdf(make_pdf_with_paragraphs_bytes(paragraphs))
+
+    kinds = [e.kind for e in result.elements]
+    assert "figure" in kinds
+    figure_element = next(e for e in result.elements if e.kind == "figure")
+    assert "98%" in figure_element.content
+    assert "Figure 4:" in figure_element.content

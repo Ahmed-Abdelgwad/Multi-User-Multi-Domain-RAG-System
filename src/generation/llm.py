@@ -13,6 +13,15 @@ def get_api_chat_model():
     explicitly disabled via extra_body; with it off, same answers land
     in ~1-4s. api_key comes from OPENROUTER_API_KEY (Settings/env only,
     never hardcoded).
+
+    `frequency_penalty` addresses a second, separate defect found live
+    (unrelated to reasoning tokens): even with reasoning off, this model
+    sometimes restates its own already-complete answer 2-3 times in
+    slightly different phrasing within one completion instead of
+    stopping cleanly. A real, native `ChatOpenAI` field (confirmed via
+    `model_fields`, not guessed) rather than an invented `extra_body` key
+    -- it's a standard OpenAI-compatible chat-completions parameter that
+    OpenRouter passes through as-is.
     """
     from langchain_openai import ChatOpenAI
 
@@ -22,6 +31,7 @@ def get_api_chat_model():
         model=settings.openrouter_model_name,
         api_key=settings.openrouter_api_key,
         temperature=0.2,
+        frequency_penalty=0.6,
         extra_body={"reasoning": {"enabled": False}},
     )
 

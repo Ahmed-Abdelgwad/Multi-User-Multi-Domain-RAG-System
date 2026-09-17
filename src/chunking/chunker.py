@@ -42,9 +42,11 @@ def build_documents(elements: list[dict], paragraphs_per_chunk: int, overlap: in
 
     splitter = ParagraphGroupTextSplitter(paragraphs_per_chunk, overlap)
     documents: list[Document] = []
+    atomic_content_types = {"table": ChunkContentType.TABLE, "figure": ChunkContentType.FIGURE}
     for el in elements:
-        if el["kind"] == "table":
-            documents.append(Document(page_content=el["content"], metadata={"content_type": ChunkContentType.TABLE.value}))
+        if el["kind"] in atomic_content_types:
+            content_type = atomic_content_types[el["kind"]]
+            documents.append(Document(page_content=el["content"], metadata={"content_type": content_type.value}))
         else:
             documents.extend(
                 splitter.create_documents([el["content"]], metadatas=[{"content_type": ChunkContentType.TEXT.value}])

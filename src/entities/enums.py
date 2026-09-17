@@ -47,6 +47,7 @@ class DocumentStatus(str, enum.Enum):
 class ChunkContentType(str, enum.Enum):
     TEXT = "text"
     TABLE = "table"
+    FIGURE = "figure"
 
 
 class LLMRoute(str, enum.Enum):
