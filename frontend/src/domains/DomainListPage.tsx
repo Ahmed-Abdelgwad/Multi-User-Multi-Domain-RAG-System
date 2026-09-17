@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createDomain, listDomains } from '../api/domains'
+import { createDomain, deleteAllArchivedDomains, listDomains } from '../api/domains'
 import { useAuth } from '../auth/AuthContext'
 import { ApiError } from '../api/client'
 import { useToast } from '../components/ToastProvider'
@@ -25,6 +25,7 @@ export function DomainListPage() {
   const { addToast } = useToast()
   const { data: domains, isLoading, error } = useQuery({ queryKey: ['domains'], queryFn: listDomains })
   const [showCreate, setShowCreate] = useState(false)
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
@@ -42,6 +43,23 @@ export function DomainListPage() {
     onError: (err) => setFormError(err instanceof ApiError ? err.message : 'Could not create domain'),
   })
 
+  const deleteAllMutation = useMutation({
+    mutationFn: () => deleteAllArchivedDomains(),
+    onSuccess: (deletedIds) => {
+      queryClient.invalidateQueries({ queryKey: ['domains'] })
+      refreshDomains()
+      setShowDeleteAllConfirm(false)
+      addToast(
+        deletedIds.length === 0 ? 'No archived domains to delete' : `Deleted ${deletedIds.length} archived domain(s)`,
+        'success',
+      )
+    },
+    onError: (err) => {
+      addToast(err instanceof ApiError ? err.message : 'Could not delete archived domains', 'error')
+      setShowDeleteAllConfirm(false)
+    },
+  })
+
   if (isLoading) {
     return (
       <div>
@@ -56,14 +74,44 @@ export function DomainListPage() {
   const otherDomains = (domains ?? []).filter((d) => !roleByDomainId.has(d.id))
 
   const hasNoAccessAtAll = myDomains.length === 0 && !user?.is_platform_admin
+  const hasArchivedDomains = (domains ?? []).some((d) => d.is_archived)
 
   return (
     <div>
       <div className="page-header">
         <h1>Domains</h1>
-        {user?.is_platform_admin && <Button onClick={() => setShowCreate(true)}>Create domain</Button>}
+        <div className="button-row">
+          {user?.is_platform_admin && hasArchivedDomains && (
+            <Button variant="danger" onClick={() => setShowDeleteAllConfirm(true)}>
+              Delete all archived
+            </Button>
+          )}
+          {user?.is_platform_admin && <Button onClick={() => setShowCreate(true)}>Create domain</Button>}
+        </div>
       </div>
       {error && <ErrorBanner message={error instanceof ApiError ? error.message : 'Could not load domains'} />}
+
+      {showDeleteAllConfirm && (
+        <Modal title="Delete all archived domains?" onClose={() => setShowDeleteAllConfirm(false)}>
+          <p>
+            This permanently deletes every archived domain and everything in it -- documents, chunks, graph data,
+            config, roles, and related query history. Active (non-archived) domains are left untouched. This cannot
+            be undone.
+          </p>
+          <div className="form-actions">
+            <Button
+              variant="ghost"
+              onClick={() => setShowDeleteAllConfirm(false)}
+              disabled={deleteAllMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => deleteAllMutation.mutate()} disabled={deleteAllMutation.isPending}>
+              {deleteAllMutation.isPending ? 'Deleting...' : 'Delete all archived'}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       {hasNoAccessAtAll ? (
         <EmptyState

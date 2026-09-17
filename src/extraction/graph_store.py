@@ -34,6 +34,13 @@ FOREACH (_ IN CASE WHEN $chunk_id IN r.chunk_ids THEN [] ELSE [1] END |
 )
 """
 
+# DETACH DELETE also removes every RELATES edge touching a matched node
+# (both endpoints carry domain_id, but deleting the nodes is enough).
+_DELETE_DOMAIN_GRAPH = """
+MATCH (e:Entity {domain_id: $domain_id})
+DETACH DELETE e
+"""
+
 
 def upsert_node_to_graph(node: GraphNode, chunk_id: UUID) -> None:
     get_graph_client().query(_UPSERT_NODE, {
@@ -56,3 +63,7 @@ def upsert_edge_to_graph(edge: GraphEdge, chunk_id: UUID) -> None:
         "mention_count": edge.mention_count,
         "chunk_id": str(chunk_id),
     })
+
+
+def delete_domain_graph(domain_id: UUID) -> None:
+    get_graph_client().query(_DELETE_DOMAIN_GRAPH, {"domain_id": str(domain_id)})

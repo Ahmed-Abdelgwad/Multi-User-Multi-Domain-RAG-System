@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { archiveDomain, assignRole, getDomain, listDomainRoles, revokeRole } from '../api/domains'
+import { archiveDomain, assignRole, deleteDomain, getDomain, listDomainRoles, revokeRole } from '../api/domains'
 import { useAuth } from '../auth/AuthContext'
 import { ApiError } from '../api/client'
 import { useToast } from '../components/ToastProvider'
@@ -9,6 +9,7 @@ import type { DomainRole, UserResponse } from '../api/types'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { Modal } from '../components/Modal'
 import { Spinner } from '../components/Spinner'
 import { UserSearchCombobox } from '../components/UserSearchCombobox'
 
@@ -18,7 +19,9 @@ export function DomainDetailPage() {
   const { domainId } = useParams<{ domainId: string }>()
   const { user, domains: myDomains } = useAuth()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<'overview' | 'roles'>('overview')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const domainQuery = useQuery({
     queryKey: ['domain', domainId],
@@ -36,6 +39,19 @@ export function DomainDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['domain', domainId] })
       addToast('Domain archived', 'success')
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteDomain(domainId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domains'] })
+      addToast('Domain deleted', 'success')
+      navigate('/domains')
+    },
+    onError: (err) => {
+      addToast(err instanceof ApiError ? err.message : 'Could not delete domain', 'error')
+      setShowDeleteConfirm(false)
     },
   })
 
@@ -60,8 +76,30 @@ export function DomainDetailPage() {
             {archiveMutation.isPending ? 'Archiving...' : 'Archive domain'}
           </Button>
         )}
+        {user?.is_platform_admin && domain.is_archived && (
+          <Button variant="danger" onClick={() => setShowDeleteConfirm(true)}>
+            Delete domain
+          </Button>
+        )}
       </div>
       <p className="muted">{domain.description ?? 'No description.'}</p>
+
+      {showDeleteConfirm && (
+        <Modal title="Delete domain permanently?" onClose={() => setShowDeleteConfirm(false)}>
+          <p>
+            This permanently deletes <strong>{domain.name}</strong> and everything in it -- documents, chunks,
+            graph data, retrieval/ingestion config, roles, and related query history. This cannot be undone.
+          </p>
+          <div className="form-actions">
+            <Button variant="ghost" onClick={() => setShowDeleteConfirm(false)} disabled={deleteMutation.isPending}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete permanently'}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       <div className="tabs">
         <button className={tab === 'overview' ? 'tab active' : 'tab'} onClick={() => setTab('overview')}>

@@ -56,6 +56,14 @@ class DuplicateDomainNameError(DomainError):
     def __init__(self, name: str):
         super().__init__(status_code=409, detail=f"A domain named '{name}' already exists")
 
+class DomainNotArchivedError(DomainError):
+    def __init__(self, domain_id=None):
+        message = (
+            "Domain must be archived before it can be deleted" if domain_id is None
+            else f"Domain with id {domain_id} must be archived before it can be deleted"
+        )
+        super().__init__(status_code=400, detail=message)
+
 class SSOPoolMismatchError(AuthenticationError):
     def __init__(self, message: str = "This account belongs to a different user pool"):
         super().__init__(message)

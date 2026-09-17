@@ -141,6 +141,61 @@ def test_non_admin_cannot_archive_domain(client: TestClient, platform_admin_head
     assert response.status_code == 403
 
 
+def test_cannot_hard_delete_a_domain_that_is_not_archived(client: TestClient, platform_admin_headers):
+    domain_id = _create_domain(client, platform_admin_headers, name="not-archived-domain").json()["id"]
+
+    response = client.delete(f"/domains/{domain_id}", headers=platform_admin_headers)
+
+    assert response.status_code == 400
+    assert client.get(f"/domains/{domain_id}", headers=platform_admin_headers).status_code == 200
+
+
+def test_non_platform_admin_cannot_hard_delete_domain(client: TestClient, platform_admin_headers, make_user_with_role):
+    domain_id = _create_domain(client, platform_admin_headers, name="admin-only-delete-domain").json()["id"]
+    admin_headers, _ = make_user_with_role(domain_id, DomainRole.ADMIN)
+    client.post(f"/domains/{domain_id}/archive", headers=platform_admin_headers)
+
+    response = client.delete(f"/domains/{domain_id}", headers=admin_headers)
+
+    assert response.status_code == 403
+
+
+def test_platform_admin_can_hard_delete_an_archived_domain(client: TestClient, platform_admin_headers, make_user_with_role):
+    domain_id = _create_domain(client, platform_admin_headers, name="deletable-domain").json()["id"]
+    make_user_with_role(domain_id, DomainRole.READER)  # extra row that must be cleaned up too
+    client.post(f"/domains/{domain_id}/archive", headers=platform_admin_headers)
+
+    response = client.delete(f"/domains/{domain_id}", headers=platform_admin_headers)
+
+    assert response.status_code == 204
+    assert client.get(f"/domains/{domain_id}", headers=platform_admin_headers).status_code == 403
+
+
+def test_delete_all_archived_domains_only_deletes_archived_ones(client: TestClient, platform_admin_headers):
+    archived_id = _create_domain(client, platform_admin_headers, name="bulk-archived-domain").json()["id"]
+    active_id = _create_domain(client, platform_admin_headers, name="bulk-active-domain").json()["id"]
+    client.post(f"/domains/{archived_id}/archive", headers=platform_admin_headers)
+
+    response = client.delete("/domains/", headers=platform_admin_headers)
+
+    assert response.status_code == 200
+    deleted_ids = response.json()
+    assert archived_id in deleted_ids
+    assert active_id not in deleted_ids
+    assert client.get(f"/domains/{archived_id}", headers=platform_admin_headers).status_code == 403
+    assert client.get(f"/domains/{active_id}", headers=platform_admin_headers).status_code == 200
+
+
+def test_non_platform_admin_cannot_bulk_delete_archived_domains(client: TestClient, platform_admin_headers):
+    domain_id = _create_domain(client, platform_admin_headers, name="bulk-rbac-domain").json()["id"]
+    client.post(f"/domains/{domain_id}/archive", headers=platform_admin_headers)
+
+    response = client.delete("/domains/")  # no auth header at all
+
+    assert response.status_code == 401
+    assert client.get(f"/domains/{domain_id}", headers=platform_admin_headers).status_code == 200
+
+
 def test_cross_domain_isolation_reader_cannot_see_other_domains_roles(
     client: TestClient, platform_admin_headers, make_user_with_role
 ):

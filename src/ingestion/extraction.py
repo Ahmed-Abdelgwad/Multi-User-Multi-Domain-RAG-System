@@ -1,4 +1,5 @@
 import logging
+import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -77,8 +78,37 @@ def _read_pdf_metadata(tmp_path: Path) -> tuple[str | None, datetime | None]:
     return author, doc_created_at
 
 
+_COMMON_WORDS = frozenset((Path(__file__).parent / "data" / "common_words.txt").read_text().split())
+_LEADING_ALPHA_RE = re.compile(r"^[A-Za-z]+")
+_TRAILING_HYPHENATED_WORD_RE = re.compile(r"[A-Za-z]+-$")
+
+
+def _ends_hyphenated(word: str) -> bool:
+    return len(word) >= 2 and word[-1] == "-" and word[-2].isalpha()
+
+
+def _dehyphenated_join(line: str, first_word: str) -> str:
+    """`line` is the whole accumulated line so far, ending in the '-' the
+    PDF's own line-wrap left behind; `first_word` is the next line's
+    first token. Only the trailing word fragment (not the whole line)
+    is a dictionary-lookup candidate -- a genuine compound
+    ("access-control", "client-side") looks identical at this point to a
+    single word split across the break ("Infor-" / "mation"), so only
+    drop the hyphen when doing so reconstructs a real dictionary word.
+    """
+    frag_match = _TRAILING_HYPHENATED_WORD_RE.search(line)
+    alpha_match = _LEADING_ALPHA_RE.match(first_word)
+    if not frag_match or not alpha_match:
+        return line + first_word
+    frag = frag_match.group()[:-1]
+    alpha, rest = alpha_match.group(), first_word[alpha_match.end():]
+    if (frag + alpha).lower() in _COMMON_WORDS:
+        return line[:frag_match.start()] + frag + alpha + rest
+    return line + first_word
+
+
 def _reconstruct_paragraphs(text: str) -> str:
-    
+
     paragraphs: list[str] = []
     current: list[str] = []
     for line in text.split("\n"):
@@ -88,7 +118,13 @@ def _reconstruct_paragraphs(text: str) -> str:
                 paragraphs.append(" ".join(current))
                 current = []
             continue
-        current.append(stripped)
+        if current and _ends_hyphenated(current[-1]):
+            first_word, _, rest = stripped.partition(" ")
+            current[-1] = _dehyphenated_join(current[-1], first_word)
+            if rest:
+                current.append(rest)
+        else:
+            current.append(stripped)
         if stripped[-1] in ".!?:":
             paragraphs.append(" ".join(current))
             current = []
@@ -140,23 +176,90 @@ def _midpoint_y(obj) -> float:
     return (obj.bbox[1] + obj.bbox[3]) / 2
 
 
-def _page_text_objects(page) -> list:
-    """All of a page's text runs, in true top-to-bottom/left-to-right
-    reading order -- confirmed live that `playa`'s bbox is top-down
-    (smaller y = higher on the page) and one object per rendered line.
+_COLUMN_STRADDLE_RATIO = 0.15
+_MIN_OBJECTS_FOR_COLUMN_DETECTION = 6
+
+
+def _order_page_text_objects(objs: list) -> list:
+    """A flat top-to-bottom sort reads a two-column page's left/right
+    columns interleaved line by line, splicing unrelated sentences
+    together mid-paragraph -- confirmed live on a real 2-column ACM
+    paper. Detect a vertical gutter that (almost) nothing straddles,
+    then read each band of the page (full-width lines, or a two-column
+    region) top to bottom, left column before right column.
     """
-    return sorted(
-        (obj for obj in page if obj.object_type == "text"),
-        key=lambda o: (_midpoint_y(o), o.bbox[0]),
-    )
+    if len(objs) < _MIN_OBJECTS_FOR_COLUMN_DETECTION:
+        return sorted(objs, key=lambda o: (_midpoint_y(o), o.bbox[0]))
+
+    mid_x = (min(o.bbox[0] for o in objs) + max(o.bbox[2] for o in objs)) / 2
+    spanning = [o for o in objs if o.bbox[0] < mid_x < o.bbox[2]]
+    if len(spanning) > len(objs) * _COLUMN_STRADDLE_RATIO:
+        # Most lines cross the midpoint -- a single column, not two.
+        return sorted(objs, key=lambda o: (_midpoint_y(o), o.bbox[0]))
+    spanning_ids = {id(o) for o in spanning}
+
+    bands: list[tuple[str, list]] = []
+    for obj in sorted(objs, key=_midpoint_y):
+        kind = "span" if id(obj) in spanning_ids else "col"
+        if bands and bands[-1][0] == kind:
+            bands[-1][1].append(obj)
+        else:
+            bands.append((kind, [obj]))
+
+    result: list = []
+    for kind, group in bands:
+        if kind == "span":
+            result.extend(sorted(group, key=_midpoint_y))
+            continue
+        left = sorted((o for o in group if o.bbox[2] <= mid_x), key=lambda o: (_midpoint_y(o), o.bbox[0]))
+        right = sorted((o for o in group if o.bbox[0] >= mid_x), key=lambda o: (_midpoint_y(o), o.bbox[0]))
+        result.extend(left)
+        result.extend(right)
+    return result
 
 
-def _page_plain_text(page) -> str:
-    return _strip_nul_bytes("\n".join(_text_object_chars(obj) for obj in _page_text_objects(page)))
+_HEADER_FOOTER_MIN_PAGES = 3
+_HEADER_FOOTER_MIN_RATIO = 0.35
+_HEADER_FOOTER_MIN_CHARS = 15
 
 
-def _split_page_by_tables(page, page_tables: list[TableExtract]) -> list[DocumentElement]:
-    
+def _detect_running_headers_footers(pages: list) -> frozenset:
+    """Text repeating verbatim across many pages (running titles, author
+    bylines, DOI/copyright lines) is layout furniture, not body content.
+    Double-sided templates (confirmed live on a real ACM paper) often
+    alternate two different header strings on odd/even pages, so each
+    variant alone can cover well under half the pages -- a majority
+    threshold would miss both. A length floor keeps short recurring
+    captions ("Table 1") from being mistaken for boilerplate.
+    """
+    if len(pages) < _HEADER_FOOTER_MIN_PAGES:
+        return frozenset()
+    counts: dict[str, int] = {}
+    for page in pages:
+        for line in {_text_object_chars(o).strip() for o in page if o.object_type == "text"}:
+            if len(line) >= _HEADER_FOOTER_MIN_CHARS:
+                counts[line] = counts.get(line, 0) + 1
+    threshold = max(2, round(len(pages) * _HEADER_FOOTER_MIN_RATIO))
+    return frozenset(line for line, count in counts.items() if count >= threshold)
+
+
+def _page_text_objects(page, skip_lines: frozenset = frozenset()) -> list:
+    """All of a page's text runs, in true reading order (see
+    `_order_page_text_objects`), minus any running header/footer lines.
+    """
+    objs = [
+        obj for obj in page
+        if obj.object_type == "text" and _text_object_chars(obj).strip() not in skip_lines
+    ]
+    return _order_page_text_objects(objs)
+
+
+def _page_plain_text(page, skip_lines: frozenset = frozenset()) -> str:
+    return _strip_nul_bytes("\n".join(_text_object_chars(obj) for obj in _page_text_objects(page, skip_lines)))
+
+
+def _split_page_by_tables(page, page_tables: list[TableExtract], skip_lines: frozenset = frozenset()) -> list[DocumentElement]:
+
     page_height = page.height
     table_ranges = sorted(
         ((page_height - t.bbox[3], page_height - t.bbox[1], t) for t in page_tables),
@@ -168,7 +271,7 @@ def _split_page_by_tables(page, page_tables: list[TableExtract]) -> list[Documen
     # structurally by Camelot; including it again here would duplicate
     # it as loose prose.
     prose = [
-        (obj, _midpoint_y(obj)) for obj in _page_text_objects(page)
+        (obj, _midpoint_y(obj)) for obj in _page_text_objects(page, skip_lines)
         if not any(top <= _midpoint_y(obj) <= bottom for top, bottom, _ in table_ranges)
     ]
 
@@ -193,8 +296,8 @@ def _split_page_by_tables(page, page_tables: list[TableExtract]) -> list[Documen
     return segments
 
 
-def _pdf_elements(playa_pages: list, tables: list[TableExtract]) -> list[DocumentElement]:
-    
+def _pdf_elements(playa_pages: list, tables: list[TableExtract], skip_lines: frozenset = frozenset()) -> list[DocumentElement]:
+
     tables_by_page: dict[int, list[TableExtract]] = {}
     for t in tables:
         tables_by_page.setdefault(t.page - 1, []).append(t)
@@ -204,15 +307,15 @@ def _pdf_elements(playa_pages: list, tables: list[TableExtract]) -> list[Documen
     for page_index, page in enumerate(playa_pages):
         page_tables = tables_by_page.get(page_index)
         if not page_tables:
-            prose_buffer.append(_reconstruct_paragraphs(_page_plain_text(page)))
+            prose_buffer.append(_reconstruct_paragraphs(_page_plain_text(page, skip_lines)))
             continue
 
         try:
-            segments = _split_page_by_tables(page, page_tables)
+            segments = _split_page_by_tables(page, page_tables, skip_lines)
         except Exception as e:
-            
+
             logging.warning(f"Positional table split failed for page {page_index}: {e}")
-            prose_buffer.append(_reconstruct_paragraphs(_page_plain_text(page)))
+            prose_buffer.append(_reconstruct_paragraphs(_page_plain_text(page, skip_lines)))
             segments = [DocumentElement(kind="table", content=t.markdown) for t in page_tables]
 
         for seg in segments:
@@ -237,21 +340,22 @@ def extract_pdf(raw_bytes: bytes) -> ExtractionResult:
 
         with playa.open(str(tmp_path)) as pdf:
             playa_pages = list(pdf.pages)
-            native_text = "\n".join(_page_plain_text(p) for p in playa_pages)
+            skip_lines = _detect_running_headers_footers(playa_pages)
+            native_text = "\n".join(_page_plain_text(p, skip_lines) for p in playa_pages)
             ocr_used = len(native_text.strip()) < MIN_NATIVE_TEXT_CHARS
 
             if ocr_used:
-                
+
                 tables: list[TableExtract] = []
                 elements: list[DocumentElement] = []
             else:
                 try:
                     tables = _extract_tables_camelot(str(tmp_path))
                 except Exception as e:
-                    
+
                     logging.warning(f"Table extraction failed for {tmp_path}: {e}")
                     tables = []
-                elements = _pdf_elements(playa_pages, tables)
+                elements = _pdf_elements(playa_pages, tables, skip_lines)
     finally:
         tmp_path.unlink(missing_ok=True)
 

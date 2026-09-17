@@ -27,6 +27,14 @@ export function archiveDomain(domainId: string): Promise<DomainResponse> {
   return apiPost<DomainResponse>(`/domains/${domainId}/archive`)
 }
 
+export function deleteDomain(domainId: string): Promise<void> {
+  return apiDelete<void>(`/domains/${domainId}`)
+}
+
+export function deleteAllArchivedDomains(): Promise<string[]> {
+  return apiDelete<string[]>('/domains/')
+}
+
 export function listDomainRoles(domainId: string): Promise<UserDomainRoleResponse[]> {
   return apiGet<UserDomainRoleResponse[]>(`/domains/${domainId}/roles`)
 }

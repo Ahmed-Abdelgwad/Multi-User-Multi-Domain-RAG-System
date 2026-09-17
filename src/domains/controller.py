@@ -53,6 +53,25 @@ def archive_domain(
     return service.archive_domain(db, domain_id, current_user.get_uuid())
 
 
+@router.delete("/{domain_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_domain(
+    db: DbSession,
+    domain_id: UUID,
+    _admin: User = Depends(require_platform_admin),
+):
+    # Platform-admin only (not domain-admin) -- this is irreversible and
+    # spans Postgres, MinIO, and Neo4j, unlike archiving.
+    service.delete_domain(db, domain_id)
+
+
+@router.delete("/", response_model=List[UUID])
+def delete_all_archived_domains(
+    db: DbSession,
+    _admin: User = Depends(require_platform_admin),
+):
+    return service.delete_all_archived_domains(db)
+
+
 @router.get("/{domain_id}/roles", response_model=List[models.UserDomainRoleResponse])
 def list_domain_roles(db: DbSession, domain_id: UUID, _role: DomainRole = Depends(RequireDomainAdmin)):
     return service.list_domain_roles(db, domain_id)

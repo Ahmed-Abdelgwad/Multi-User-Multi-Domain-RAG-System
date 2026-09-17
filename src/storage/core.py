@@ -73,3 +73,9 @@ def object_exists(object_key: str) -> bool:
         if e.code == "NoSuchKey":
             return False
         raise
+
+
+def delete_object(object_key: str) -> None:
+    client = get_minio_client()
+    bucket = ensure_bucket(client)
+    client.remove_object(bucket, object_key)
